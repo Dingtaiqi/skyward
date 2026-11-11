@@ -111,7 +111,8 @@ def main():
             "Compiled manifest includes an unexpected permission/component/element")
     for name, expected in (("hasCode", "false"), ("debuggable", "true"),
                            ("allowBackup", "false"), ("extractNativeLibs", "false")):
-        require(re.search(r"A: android:" + name + r"\([^)]*\)=" + expected + r"\b", tree),
+        namespace = r"(?:android:|http://schemas\.android\.com/apk/res/android:)"
+        require(re.search(r"A: " + namespace + name + r"\([^)]*\)=" + expected + r"\b", tree),
                 "Compiled manifest does not preserve " + name + "=" + expected)
     require("package: name='" + PACKAGE + "'" in badging
             and "sdkVersion:'30'" in badging and "targetSdkVersion:'36'" in badging
