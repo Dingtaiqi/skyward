@@ -93,6 +93,7 @@ def complete(release, work):
         assert name not in expected
         expected[name] = {'name': name, 'bytes': saved[name]['size'], 'sha256': digest}
     assert set(expected) == NAMES - {sums.name}
+    assert expected[PACKAGE]['sha256'] == ARTIFACT_SHA and expected[PACKAGE]['bytes'] == 43453910
     expected[sums.name] = metadata(sums)
     for name, item in expected.items():
         verify_asset(saved[name], item, work / ('checked-' + name))
@@ -100,10 +101,16 @@ def complete(release, work):
     assert proof['source_commit'] == SOURCE and proof['source_run']['id'] == RUN
     assert proof['source_artifact']['id'] == ARTIFACT and proof['source_artifact']['digest'] == 'sha256:' + ARTIFACT_SHA
     assert proof['source_run']['conclusion'] == 'success'
+    with zipfile.ZipFile(work / ('checked-' + PACKAGE)) as archive:
+        with archive.open(PACKAGE[:-4] + '.img') as stream:
+            header = stream.read(4096)
+    boot = {'kernel_bytes': struct.unpack_from('<I', header, 8)[0],
+        'ramdisk_bytes': struct.unpack_from('<I', header, 12)[0],
+        'cmdline': header[44:1580].split(b'\0', 1)[0].decode()}
     result = {'release_url': release['html_url'], 'tag': release['tag_name'], 'requested_tag': TAG, 'draft': True,
         'source_commit': SOURCE, 'archive_run': os.environ['GITHUB_RUN_ID'],
         'all_release_assets_downloaded_and_hashed': True,
-        'image': proof['image'], 'assets': list(expected.values())}
+        'image': proof['image'], 'boot': boot, 'assets': list(expected.values())}
     print('ARCHIVE_RESULT_JSON=' + json.dumps(result), flush=True)
     Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(
         'Draft archive verified: ' + release['html_url'] + '\n\n```json\n' + json.dumps(result, indent=2) + '\n```\n')
