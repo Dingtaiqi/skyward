@@ -19,6 +19,7 @@ ARTIFACT = 13839408282
 ARTIFACT_SHA = 'b32c871699834bb0eeedc853b2942f14f120202f29e4c409abae428289360bbe'
 PACKAGE = 'skyward-f64d5c7-socrates-OS3.0.304.0.WMKCNXM.zip'
 TAG = 'skyward-socrates-f64d5c7-20261111'
+TITLE = 'socrates f64d5c7 — build archive, not boot-tested'
 STOCK_SHA = 'a1ed92db62fb0915b20309c5fe80b9181c6cf3ecef7d76e68503a2e1e9ff8c88'
 NAMES = {PACKAGE, 'SOURCE_INPUTS.zip', 'SOURCE_BUILD_LOGS.zip', 'BUILD_PROOF.json', 'SHA256SUMS'}
 assert os.environ['GITHUB_REPOSITORY'] == REPO
@@ -99,7 +100,7 @@ def complete(release, work):
     assert proof['source_commit'] == SOURCE and proof['source_run']['id'] == RUN
     assert proof['source_artifact']['id'] == ARTIFACT and proof['source_artifact']['digest'] == 'sha256:' + ARTIFACT_SHA
     assert proof['source_run']['conclusion'] == 'success'
-    result = {'release_url': release['html_url'], 'tag': TAG, 'draft': True,
+    result = {'release_url': release['html_url'], 'tag': release['tag_name'], 'requested_tag': TAG, 'draft': True,
         'source_commit': SOURCE, 'archive_run': os.environ['GITHUB_RUN_ID'],
         'all_release_assets_downloaded_and_hashed': True,
         'image': proof['image'], 'assets': list(expected.values())}
@@ -112,7 +113,11 @@ def complete(release, work):
 with tempfile.TemporaryDirectory(prefix='socrates-archive-') as directory:
     work = Path(directory)
     releases = api(f'repos/{REPO}/releases?per_page=100')
-    release = next((r for r in releases if r['tag_name'] == TAG), None)
+    # GitHub may retain an unpublished draft under an automatic untagged-* name.
+    matches = [r for r in releases if r['tag_name'] == TAG or
+        (r['draft'] and r['target_commitish'] == SOURCE and r['name'] == TITLE)]
+    assert len(matches) <= 1, 'Ambiguous archive release'
+    release = matches[0] if matches else None
     if release is not None:
         assert release['draft'] and release['target_commitish'] == SOURCE
         if set(assets(release)) == NAMES:
@@ -184,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='socrates-archive-') as directory:
         'The original recovery ZIP, original source inputs, source build logs, and checksum/build evidence are retained here.\n')
     if release is None:
         release = api(f'repos/{REPO}/releases', {'tag_name': TAG, 'target_commitish': SOURCE,
-            'name': 'socrates f64d5c7 — build archive, not boot-tested', 'body': body, 'draft': True, 'prerelease': True})
+            'name': TITLE, 'body': body, 'draft': True, 'prerelease': True})
     assert release['draft'] and release['target_commitish'] == SOURCE
     core = []
     for path in (package, source_inputs, logs):
