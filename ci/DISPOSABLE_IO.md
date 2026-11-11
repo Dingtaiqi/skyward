@@ -12,6 +12,13 @@ block-device write and independent byte comparison, refusal of oversized writes,
 and compressed backup/restore on mounted ext4 including hardlinks, symlinks,
 permissions, stale-file removal, digest validation and protected exclusions.
 
+The same jail also runs the production MTP responder's ignored protocol test
+against a dedicated fixture on a real `ext4 ro,noload` mount. It checks the
+StorageInfo read-only flag, ASCII/Chinese downloads, rejected uploads and other
+writes, and unchanged fixture bytes. A digest over the entire ext4 image before
+and after adds an independent no-write check. This is protocol/VFS validation;
+it does not exercise USB transport or a desktop MTP client.
+
 Limits: native Ubuntu filesystem tools differ from Android's tool versions.
 Android-only `BLKSECDISCARD`/`BLKDISCARD`, SELinux/fscrypt restoration, the
 factory-reset orchestration, and a complete OTA/update_engine/VAB/AVB/BCB install

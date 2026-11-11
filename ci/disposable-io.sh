@@ -5,6 +5,8 @@ set -euo pipefail
 [[ $(readlink /proc/self/ns/mnt) != $(readlink /proc/1/ns/mnt) ]]
 binary=$(realpath -- "$1")
 [[ -f $binary && -x $binary ]]
+mtp_binary=$(realpath -- "$2")
+[[ -f $mtp_binary && -x $mtp_binary ]]
 base=$(realpath -- "$RUNNER_TEMP")
 top=$(mktemp -d "$base/skyward-disposable.XXXXXX")
 jail=$top/jail
@@ -53,6 +55,7 @@ actual=$(command -v blockdev)
 actual=$(command -v cmp)
 [[ $actual == /usr/bin/cmp ]] || ln -s "$actual" "$jail/usr/bin/cmp"
 copy_program "$binary" /test/disposable
+copy_program "$mtp_binary" /test/mtp
 printf 'skyward-ci-loopback-v1\n' > "$jail/test/disposable-only"
 for item in source:64 target:64 f2fs:128; do
   name=${item%:*}; mib=${item#*:}
@@ -73,3 +76,22 @@ chmod 0666 "$jail/dev/null" "$jail/dev/urandom" "$jail/dev/random"
 mount -t proc proc "$jail/proc" -o nosuid,nodev,noexec
 export LC_ALL=C
 chroot "$jail" /test/disposable --ignored --exact disposable_loopbacks_round_trip --nocapture
+
+# Reuse only our first ext4 loop, after the destructive IO test unmounted it.
+# The MTP test sees a dedicated subdirectory of a genuinely read-only ext4
+# filesystem, never Android's data or a writable simulation of it.
+mount -t ext4 "${loops[0]}" "$jail/fixture/source"
+mkdir -p "$jail/fixture/source/mtp-ro-fixture/destination"
+printf 'immutable MTP fixture\n' > "$jail/fixture/source/mtp-ro-fixture/plain.txt"
+printf '只读传输测试\n' > "$jail/fixture/source/mtp-ro-fixture/中文文件.txt"
+umount "$jail/fixture/source"
+before=$(sha256sum "$top/source.img" | cut -d' ' -f1)
+mount -t ext4 -o ro,noload,nosuid,nodev,noexec "${loops[0]}" "$jail/fixture/source"
+export SKYWARD_MTP_RO_ROOT=/fixture/source/mtp-ro-fixture
+mtp_test=responder::tests::a_read_only_mount_is_reported_and_writes_are_refused_without_changing_files
+chroot "$jail" /test/mtp --list --ignored | grep -Fx "$mtp_test: test"
+chroot "$jail" /test/mtp --ignored --exact "$mtp_test" --nocapture
+umount "$jail/fixture/source"
+after=$(sha256sum "$top/source.img" | cut -d' ' -f1)
+[[ $before == "$after" ]]
+printf 'PASS read-only MTP protocol and unchanged entire ext4 image: %s\n' "$after"

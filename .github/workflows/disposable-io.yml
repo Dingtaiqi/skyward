@@ -25,12 +25,15 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
       - name: Run existing production component tests
-        run: cargo test --locked -p skyward-block -p skyward-backup -p skyward-install --lib
+        run: cargo test --locked -p skyward-block -p skyward-backup -p skyward-install -p skyward-mtp --lib
       - name: Build the isolated integration test
         run: |
           cargo test --locked -p skyward-install --test disposable_io --no-run --message-format=json > test-build.jsonl
           jq -r 'select(.profile.test and .executable != null) | .executable' test-build.jsonl > test-binary
           test "$(wc -l < test-binary)" -eq 1
+          cargo test --locked -p skyward-mtp --lib --no-run --message-format=json > mtp-build.jsonl
+          jq -r 'select(.profile.test and .executable != null) | .executable' mtp-build.jsonl > mtp-test-binary
+          test "$(wc -l < mtp-test-binary)" -eq 1
       - name: Prove the test refuses to write outside its jail
         run: |
           mkdir -p proof
@@ -43,8 +46,8 @@ jobs:
         run: |
           mkdir -p proof
           git rev-parse HEAD > proof/SOURCE_COMMIT
-          sha256sum Cargo.lock crates/skyward-install/src/image.rs crates/skyward-block/src/erase.rs crates/skyward-backup/src/archive.rs crates/skyward-backup/src/store.rs > proof/PRODUCTION_SOURCE_SHA256SUMS
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP unshare --mount --propagation private bash ci/disposable-io.sh "$(cat test-binary)" 2>&1 | tee proof/disposable-io.log
+          sha256sum Cargo.lock crates/skyward-install/src/image.rs crates/skyward-block/src/erase.rs crates/skyward-backup/src/archive.rs crates/skyward-backup/src/store.rs crates/skyward-mtp/src/codes.rs crates/skyward-mtp/src/responder.rs crates/skyward-mtp/src/responder/tests.rs > proof/PRODUCTION_SOURCE_SHA256SUMS
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP unshare --mount --propagation private bash ci/disposable-io.sh "$(cat test-binary)" "$(cat mtp-test-binary)" 2>&1 | tee proof/disposable-io.log
       - uses: actions/upload-artifact@v7
         if: always()
         with:
