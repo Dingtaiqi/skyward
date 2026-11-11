@@ -1,0 +1,31 @@
+{
+  "workflow_url": "https://github.com/Dingtaiqi/skyward/actions/runs/43021585360",
+  "tested_commit": "f21e8d7c2305967cd751c4419ac606cbc45dcdce",
+  "production_base": "08363583895baf99c8f1ef86ae5812399b96cce8",
+  "conclusion": "success",
+  "existing_component_tests_passed": 167,
+  "disposable_loopback_integration_tests_passed": 1,
+  "outside_jail_refusal_passed": true,
+  "production_functions_unchanged": [
+    "crates/skyward-install/src/image.rs",
+    "crates/skyward-block/src/erase.rs",
+    "crates/skyward-backup/src/archive.rs",
+    "crates/skyward-backup/src/store.rs"
+  ],
+  "artifact_id": 13854284336,
+  "artifact_zip_sha256": "d2b8d4fa6b9bc193c8c6fc375e0a7edd312fc9d43599d1952e1b1873e2f72b04",
+  "verified": [
+    "production ext4 and F2FS formatter entrypoints with native filesystem tools",
+    "F2FS check without repair flags; full 128 MiB SHA unchanged",
+    "production 64 MiB image write/readback, independent full-device cmp after buffer flush",
+    "oversized image rejected before write and target remains byte-identical",
+    "production LZ4 store and archive pack/unpack on mounted ext4; digest checked",
+    "payload, hardlink, symlink, permissions, stale-file removal and protected exclusions"
+  ],
+  "not_validated": [
+    "Android filesystem utility versions and UFS-specific discard or secure discard",
+    "full factory-reset orchestration, real userdata formatting or SELinux/fscrypt restore",
+    "complete OTA/update_engine installation, VAB, AVB, BCB or slot transitions",
+    "recovery UI image classification from this low-level writer test"
+  ]
+}
