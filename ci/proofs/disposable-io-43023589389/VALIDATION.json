@@ -1,0 +1,58 @@
+{
+  "workflow_url": "https://github.com/Dingtaiqi/skyward/actions/runs/43023589389",
+  "tested_commit": "ca2cf871a36ea6f4494ef56b7c93da4d62303168",
+  "conclusion": "success",
+  "original_io_base": "08363583895baf99c8f1ef86ae5812399b96cce8",
+  "original_mtp_change": "b604e1df31b96dd3bf9641b43b3b0a18dc463e7c",
+  "core_source_unchanged_from_io_base": [
+    "crates/skyward-install/src/image.rs",
+    "crates/skyward-block/src/erase.rs",
+    "crates/skyward-backup/src/archive.rs",
+    "crates/skyward-backup/src/store.rs"
+  ],
+  "mtp_source_identical_to_change": [
+    "crates/skyward-mtp/src/codes.rs",
+    "crates/skyward-mtp/src/responder.rs",
+    "crates/skyward-mtp/src/responder/tests.rs"
+  ],
+  "normal_component_tests_passed": {
+    "backup": 9,
+    "block": 36,
+    "install": 122,
+    "mtp": 30
+  },
+  "explicit_isolated_tests_passed": {
+    "destructive_io": 1,
+    "real_readonly_mtp": 1
+  },
+  "outside_jail_refusal_passed": true,
+  "mtp": {
+    "filesystem": "ext4 ro,noload,nosuid,nodev,noexec",
+    "statvfs_readonly_and_kernel_EROFS_verified": true,
+    "storage_info_access_capability": 1,
+    "downloads": [
+      "ASCII filename and exact bytes",
+      "Chinese filename and exact UTF-8 bytes"
+    ],
+    "write_attempts_returning_STORE_READ_ONLY": [
+      "upload",
+      "unknown-size upload",
+      "mkdir",
+      "rename",
+      "delete",
+      "move",
+      "copy",
+      "begin-edit"
+    ],
+    "fixture_content_and_empty_destination_preserved": true,
+    "whole_ext4_image_bytes": 67108864,
+    "whole_ext4_image_sha256_before_and_after": "72c810678115c08730cf52110301511a596dd8d5bb89b8ddf5b871d62ab96463"
+  },
+  "artifact_id": 13856546476,
+  "artifact_zip_sha256": "14389404e0e0c5cb8c3651f7d9bb0bb7f999d78dcb173a272ae824e254022c53",
+  "limits": [
+    "MTP protocol/VFS test does not exercise USB transport or a desktop client",
+    "native Ubuntu filesystem tools do not prove Android-tool behavior",
+    "no real UFS discard, factory reset, userdata format, SELinux/fscrypt restore, OTA/VAB/AVB/BCB or slot transition"
+  ]
+}
