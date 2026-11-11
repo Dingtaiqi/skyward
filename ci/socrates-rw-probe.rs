@@ -49,7 +49,7 @@ mod android {
         let mut value = [0u8; 32];
         value[..8].copy_from_slice(&24u64.to_ne_bytes());
         // _IOWR('f', 22, [u8; 9]), FS_IOC_GET_ENCRYPTION_POLICY_EX.
-        let result = unsafe { libc::ioctl(dir.as_raw_fd(), 0xc0096616u32 as libc::c_ulong, value.as_mut_ptr()) };
+        let result = unsafe { libc::ioctl(dir.as_raw_fd(), 0xc0096616u32 as libc::c_int, value.as_mut_ptr()) };
         ensure!(result == 0, "read fixture encryption policy: {}", std::io::Error::last_os_error());
         let len = u64::from_ne_bytes(value[..8].try_into()?) as usize;
         ensure!(len > 0 && len <= 24, "unexpected encryption policy length");
@@ -136,7 +136,7 @@ mod android {
         ensure!(fs::read(root.join("android-canary.bin"))? == expected, "untouched Android canary differs");
         File::open(&restored)?.sync_all().context("sync restored fixture directory")?;
         File::open(root)?.sync_all()?;
-        println!("{{\"fixture_probe_passed\":true,\"compressed_archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
+        println!("{{\"fixture_probe_passed\":true,\"archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
         Ok(())
     }
 }
