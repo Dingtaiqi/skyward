@@ -82,6 +82,7 @@ mod android {
         ensure!(original_policy[0] == 2, "expected the phone's v2 encryption policy");
         let label = attr(&root.join("android-canary.bin"), "security.selinux")?;
         ensure!(!label.is_empty(), "Android canary has no SELinux label");
+        let owner = fs::metadata(root.join("android-canary.bin"))?;
         let cancel = AtomicBool::new(false);
         let source = root.join("source");
         let restored = root.join("restored");
@@ -89,11 +90,15 @@ mod android {
         let copies = root.join("copies");
         for dir in [&source, &restored, &backup, &copies] {
             fs::create_dir(dir)?;
+            std::os::unix::fs::chown(dir, Some(owner.uid()), Some(owner.gid()))?;
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o770))?;
+            set_attr(dir, "security.selinux", &label)?;
             ensure!(policy(dir)? == original_policy, "new fixture directory did not inherit encryption policy");
         }
         fs::create_dir(source.join("empty"))?;
         for name in ["payload.bin", "Unicode-传输.txt"] {
             write(&source.join(name), &expected)?;
+            std::os::unix::fs::chown(source.join(name), Some(owner.uid()), Some(owner.gid()))?;
             set_attr(&source.join(name), "security.selinux", &label)?;
             set_attr(&source.join(name), "user.skyward", b"fixture-xattr")?;
             fs::set_permissions(source.join(name), fs::Permissions::from_mode(0o640))?;
@@ -131,6 +136,9 @@ mod android {
         let renamed = skyward_files::rename(&copies.join("payload.bin"), "renamed.bin")?;
         skyward_files::replace(&renamed, b"fixture edited by production file code")?;
         ensure!(fs::read(&renamed)? == b"fixture edited by production file code", "production edit differs");
+        let edited = fs::metadata(&renamed)?;
+        ensure!((edited.uid(), edited.gid(), edited.mode() & 0o7777) == (owner.uid(), owner.gid(), 0o640), "production copy/edit metadata differs");
+        ensure!(attr(&renamed, "security.selinux")? == label, "production copy/edit label differs");
         skyward_files::delete(&[renamed], &cancel, &mut |_| {})?;
         ensure!(fs::read_dir(&copies)?.next().is_none(), "production delete left the fixture");
         ensure!(fs::read(root.join("android-canary.bin"))? == expected, "untouched Android canary differs");
