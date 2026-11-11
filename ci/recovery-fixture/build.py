@@ -82,6 +82,10 @@ def main():
             "-keypass:env", "FIXTURE_KEYSTORE_PASSWORD", "-alias", "fixture",
             "-keyalg", "RSA", "-keysize", "2048", "-validity", "365",
             "-dname", "CN=Skyward recovery fixture", env=env)
+        run("keytool", "-exportcert", "-keystore", tmp / "fixture.p12",
+            "-storepass:env", "FIXTURE_KEYSTORE_PASSWORD", "-alias", "fixture",
+            "-file", tmp / "certificate.der", env=env)
+        certificate_sha = hashlib.sha256((tmp / "certificate.der").read_bytes()).hexdigest()
         run(tools / "apksigner", "sign", "--ks", tmp / "fixture.p12",
             "--ks-key-alias", "fixture", "--ks-pass", "env:FIXTURE_KEYSTORE_PASSWORD",
             "--key-pass", "env:FIXTURE_KEYSTORE_PASSWORD", "--min-sdk-version", "30",
@@ -91,11 +95,16 @@ def main():
         del env["FIXTURE_KEYSTORE_PASSWORD"]
 
     verify = run(tools / "apksigner", "verify", "--verbose", "--print-certs", apk)
-    certs = re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$",
+    print(verify)
+    # New SDKs label v3 signers differently from older "Signer #1" output.
+    # Compare every reported signing certificate to the actual exported DER.
+    certs = re.findall(r"^.*certificate SHA-256 digest: ([0-9a-fA-F]{64})$",
                        verify, re.MULTILINE)
-    require(len(certs) == 1, "Expected exactly one APK signing certificate")
+    require(certs and {cert.lower() for cert in certs} == {certificate_sha},
+            "APK verification did not report precisely our signing certificate")
     run(tools / "zipalign", "-c", "4", apk)
     tree = run(tools / "aapt2", "dump", "xmltree", apk, "--file", "AndroidManifest.xml")
+    print(tree)
     badging = run(tools / "aapt2", "dump", "badging", apk)
     elements = re.findall(r"^\s*E: ([^\s(]+)", tree, re.MULTILINE)
     require(elements == ["manifest", "uses-sdk", "application"],
@@ -121,7 +130,7 @@ def main():
     proof = {
         "source_commit": head, "package": PACKAGE, "label": "Skyward recovery fixture",
         "apk": apk.name, "apk_bytes": apk.stat().st_size, "apk_sha256": sha,
-        "certificate_sha256": certs[0].lower(), "min_sdk": 30, "target_sdk": 36,
+        "certificate_sha256": certificate_sha, "min_sdk": 30, "target_sdk": 36,
         "compile_platform": platform.name, "build_tools": tools.name,
         "aapt2_version": run(tools / "aapt2", "version").strip(),
         "zip_entries": names, "manifest_elements": elements,
@@ -134,7 +143,7 @@ def main():
     }
     (OUT / "PROOF.json").write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
     (OUT / "SHA256SUMS").write_text(sha + "  " + apk.name + "\n", encoding="ascii")
-    (OUT / "CERTIFICATE_SHA256").write_text(certs[0].lower() + "\n", encoding="ascii")
+    (OUT / "CERTIFICATE_SHA256").write_text(certificate_sha + "\n", encoding="ascii")
     (OUT / "compiled-manifest.txt").write_text(tree, encoding="utf-8")
     (OUT / "badging.txt").write_text(badging, encoding="utf-8")
     (OUT / "signature-verification.txt").write_text(verify, encoding="utf-8")
