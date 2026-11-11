@@ -114,10 +114,13 @@ def main():
         namespace = r"(?:android:|http://schemas\.android\.com/apk/res/android:)"
         require(re.search(r"A: " + namespace + name + r"\([^)]*\)=" + expected + r"\b", tree),
                 "Compiled manifest does not preserve " + name + "=" + expected)
-    require("package: name='" + PACKAGE + "'" in badging
-            and "sdkVersion:'30'" in badging and "targetSdkVersion:'36'" in badging
-            and "application-label:'Skyward recovery fixture'" in badging,
-            "Compiled manifest identity/SDK/label differs")
+    require(re.search(r'A: package="' + re.escape(PACKAGE) + r'"(?:\s|$)', tree),
+            "Compiled package name differs")
+    for name, expected in (("minSdkVersion", "30"), ("targetSdkVersion", "36")):
+        require(re.search(r"A: " + namespace + name + r"\([^)]*\)=" + expected + r"$",
+                          tree, re.MULTILINE), "Compiled SDK level differs: " + name)
+    require(re.search(r'A: ' + namespace + r'label\([^)]*\)="Skyward recovery fixture"(?:\s|$)',
+                      tree), "Compiled application label differs")
     with zipfile.ZipFile(apk) as archive:
         names = archive.namelist()
         require(len(names) == len(set(names)), "Duplicate APK ZIP entries")
