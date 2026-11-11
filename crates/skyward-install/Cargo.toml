@@ -30,4 +30,6 @@ zstd = { version = "0.14.3", default-features = false }
 
 [dev-dependencies]
 skyward-bootimg = { path = "../skyward-bootimg" }
+skyward-backup = { path = "../skyward-backup" }
+skyward-files = { path = "../skyward-files" }
 tempfile = "3.27.0"

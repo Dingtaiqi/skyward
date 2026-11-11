@@ -6,7 +6,7 @@ name: Build
 # it can build for one device alone.
 on:
   push:
-    branches: ["**"]
+    branches: ["**", "!fork/socrates-disposable-tests"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:

@@ -1,0 +1,42 @@
+name: Fork disposable recovery IO
+
+on:
+  push:
+    branches: [fork/socrates-disposable-tests]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  loopback:
+    if: github.repository == 'Dingtaiqi/skyward'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native filesystem tools
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs f2fs-tools util-linux
+      - name: Select Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Run existing production component tests
+        run: cargo test --locked -p skyward-block -p skyward-backup -p skyward-install --lib
+      - name: Build the isolated integration test
+        run: |
+          cargo test --locked -p skyward-install --test disposable_io --no-run --message-format=json > test-build.jsonl
+          jq -r 'select(.profile.test and .executable != null) | .executable' test-build.jsonl > test-binary
+          test "$(wc -l < test-binary)" -eq 1
+      - name: Exercise only disposable loop devices inside a private jail
+        run: |
+          mkdir proof
+          git rev-parse HEAD > proof/SOURCE_COMMIT
+          sha256sum Cargo.lock crates/skyward-install/src/image.rs crates/skyward-block/src/erase.rs crates/skyward-backup/src/archive.rs crates/skyward-backup/src/store.rs > proof/PRODUCTION_SOURCE_SHA256SUMS
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP unshare --mount --propagation private bash ci/disposable-io.sh "$(cat test-binary)" 2>&1 | tee proof/disposable-io.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: disposable-io-proof-${{ github.sha }}
+          path: proof/
+          if-no-files-found: warn
+          retention-days: 30
