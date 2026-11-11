@@ -66,10 +66,17 @@ mod android {
     }
 
     pub fn run() -> Result<()> {
-        ensure!(std::env::args_os().count() == 1, "this probe accepts no paths or arguments");
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let app_private = args.len() == 1 && args[0] == "--app-private";
+        ensure!(args.is_empty() || app_private, "only the fixed app-private fixture flag is accepted");
         ensure!(Path::new("/skyward/device.toml").is_file(), "not in the prepared recovery");
-        let root = Path::new(ROOT);
-        ensure!(root.canonicalize()? == root, "fixture root must not traverse links");
+        let allowed = if app_private {
+            Path::new("/data/user/0/org.skyward.recovery.fixture").canonicalize()?.join("files/Skyward-RW-test-20261111")
+        } else {
+            Path::new(ROOT).to_path_buf()
+        };
+        let root = allowed.as_path();
+        ensure!(root.canonicalize()? == allowed, "fixture root must not traverse links");
         ensure!(fs::read(root.join("OWNER.txt"))? == MARKER, "fixture owner marker differs");
         let entries = fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()?;
         ensure!(entries.len() == 2 && entries.iter().all(|e| matches!(e.file_name().to_str(), Some("OWNER.txt" | "android-canary.bin"))), "fixture is not fresh");
@@ -77,7 +84,7 @@ mod android {
         ensure!(fs::read(root.join("android-canary.bin"))? == expected, "Android-created canary differs");
         ensure!(fs::metadata(root)?.dev() == fs::metadata("/data")?.dev(), "fixture is not on userdata");
         let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        let croot = CString::new(ROOT)?;
+        let croot = CString::new(root.as_os_str().as_encoded_bytes())?;
         ensure!(unsafe { libc::statvfs(croot.as_ptr(), stat.as_mut_ptr()) } == 0, "cannot query fixture filesystem");
         ensure!(unsafe { stat.assume_init() }.f_flag & libc::ST_RDONLY as libc::c_ulong == 0, "userdata is read-only");
         let original_policy = policy(root)?;
@@ -150,7 +157,8 @@ mod android {
         ensure!(fs::read(root.join("android-canary.bin"))? == expected, "untouched Android canary differs");
         File::open(&restored)?.sync_all().context("sync restored fixture directory")?;
         File::open(root)?.sync_all()?;
-        println!("{{\"fixture_probe_passed\":true,\"archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"empty_capability_xattr_preserved\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
+        let scope = if app_private { "app-private" } else { "shared-storage" };
+        println!("{{\"scope\":\"{scope}\",\"fixture_probe_passed\":true,\"archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"empty_capability_xattr_preserved\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
         Ok(())
     }
 }
