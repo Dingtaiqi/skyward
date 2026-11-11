@@ -56,7 +56,7 @@ def verify_asset(asset, expected, target):
     assert asset['size'] == expected['bytes'] and asset['state'] == 'uploaded'
     assert asset['digest'] == 'sha256:' + expected['sha256']
     download(f'repos/{REPO}/releases/assets/{asset["id"]}', target, binary=True)
-    assert metadata(target) == expected, 'Published bytes differ: ' + expected['name']
+    assert target.stat().st_size == expected['bytes'] and sha(target) == expected['sha256'], 'Published bytes differ: ' + expected['name']
     if target.suffix == '.zip':
         with zipfile.ZipFile(target) as archive:
             assert archive.testzip() is None
