@@ -27,7 +27,7 @@ fn run(program: &str, arguments: &[&str]) {
 
 fn assert_jail() {
     assert_eq!(
-        fs::read_to_string("/test/disposable-only").unwrap(),
+        fs::read_to_string("/test/disposable-only").expect("disposable CI jail marker is missing"),
         "skyward-ci-loopback-v1\n"
     );
     assert_eq!(std::env::var("GITHUB_ACTIONS").unwrap(), "true");

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   loopback:
     if: github.repository == 'Dingtaiqi/skyward'
@@ -27,9 +31,17 @@ jobs:
           cargo test --locked -p skyward-install --test disposable_io --no-run --message-format=json > test-build.jsonl
           jq -r 'select(.profile.test and .executable != null) | .executable' test-build.jsonl > test-binary
           test "$(wc -l < test-binary)" -eq 1
+      - name: Prove the test refuses to write outside its jail
+        run: |
+          mkdir -p proof
+          if "$(cat test-binary)" --ignored --exact disposable_loopbacks_round_trip > proof/outside-jail-refusal.log 2>&1; then
+            echo 'The disposable test incorrectly ran outside its jail' >&2
+            exit 1
+          fi
+          grep -q 'disposable CI jail marker is missing' proof/outside-jail-refusal.log
       - name: Exercise only disposable loop devices inside a private jail
         run: |
-          mkdir proof
+          mkdir -p proof
           git rev-parse HEAD > proof/SOURCE_COMMIT
           sha256sum Cargo.lock crates/skyward-install/src/image.rs crates/skyward-block/src/erase.rs crates/skyward-backup/src/archive.rs crates/skyward-backup/src/store.rs > proof/PRODUCTION_SOURCE_SHA256SUMS
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_TEMP unshare --mount --propagation private bash ci/disposable-io.sh "$(cat test-binary)" 2>&1 | tee proof/disposable-io.log
