@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Install-only identity for a disposable app-private CE restore fixture. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.skyward.recovery.fixture"
+    android:versionCode="1"
+    android:versionName="1">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
+    <application
+        android:label="Skyward recovery fixture"
+        android:hasCode="false"
+        android:debuggable="true"
+        android:allowBackup="false"
+        android:extractNativeLibs="false" />
+</manifest>

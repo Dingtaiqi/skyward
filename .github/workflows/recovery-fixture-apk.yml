@@ -1,0 +1,20 @@
+name: Build disposable recovery fixture APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fixture:
+    if: github.repository == 'Dingtaiqi/skyward'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and audit a manifest-only APK with installed SDK tools
+        run: python3 ci/recovery-fixture/build.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: skyward-recovery-fixture-apk
+          path: fixture-apk-out/
+          retention-days: 7
+          if-no-files-found: error
