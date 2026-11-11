@@ -1,0 +1,27 @@
+name: Build socrates writable fixture probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Build the fork-only Android fixture probe
+        run: |
+          mkdir -p crates/skyward-backup/examples
+          cp ci/socrates-rw-probe.rs crates/skyward-backup/examples/socrates_rw_probe.rs
+          cargo ndk -t arm64-v8a --platform 30 clippy --locked -p skyward-backup --example socrates_rw_probe -- -D warnings
+          cargo ndk -t arm64-v8a --platform 30 build --locked --release -p skyward-backup --example socrates_rw_probe
+          mkdir -p probe-out
+          cp target/aarch64-linux-android/release/examples/socrates_rw_probe probe-out/
+          git rev-parse HEAD > probe-out/SOURCE_COMMIT
+          sha256sum probe-out/socrates_rw_probe > probe-out/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: socrates-rw-fixture-probe
+          path: probe-out/
+          retention-days: 7
+          if-no-files-found: error
