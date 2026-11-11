@@ -24,6 +24,8 @@ mod android {
 
     const ROOT: &str = "/data/media/0/Download/Skyward-RW-test-20261111";
     const MARKER: &[u8] = b"Skyward dedicated RW fixture 20261111; no personal data\n";
+    // Valid v2 capability xattr with no capabilities granted. Fixtures stay non-executable.
+    const EMPTY_CAPABILITY: [u8; 20] = [0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     fn attr(path: &Path, name: &str) -> Result<Vec<u8>> {
         let path = CString::new(path.as_os_str().as_encoded_bytes())?;
@@ -103,6 +105,8 @@ mod android {
             set_attr(&source.join(name), "user.skyward", b"fixture-xattr")?;
             fs::set_permissions(source.join(name), fs::Permissions::from_mode(0o640))?;
         }
+        set_attr(&source.join("payload.bin"), "security.capability", &EMPTY_CAPABILITY)?;
+        ensure!(attr(&source.join("payload.bin"), "security.capability")? == EMPTY_CAPABILITY, "fixture capability xattr differs");
         fs::hard_link(source.join("payload.bin"), source.join("hard.bin"))?;
         std::os::unix::fs::symlink("payload.bin", source.join("soft.bin"))?;
         write(&source.join("skipped.bin"), b"not archived")?;
@@ -132,6 +136,7 @@ mod android {
             ensure!(attr(&to, "user.skyward")? == b"fixture-xattr", "restored xattr differs");
         }
         ensure!(policy(&restored)? == original_policy && policy(&restored.join("empty"))? == original_policy, "restored encryption policy differs");
+        ensure!(attr(&restored.join("payload.bin"), "security.capability")? == EMPTY_CAPABILITY, "restored capability xattr differs");
         skyward_files::copy(&[restored.join("payload.bin")], &copies, Clash::Refuse, Ownership::Kept, &cancel, &mut |_| {})?;
         let renamed = skyward_files::rename(&copies.join("payload.bin"), "renamed.bin")?;
         skyward_files::replace(&renamed, b"fixture edited by production file code")?;
@@ -139,12 +144,13 @@ mod android {
         let edited = fs::metadata(&renamed)?;
         ensure!((edited.uid(), edited.gid(), edited.mode() & 0o7777) == (owner.uid(), owner.gid(), 0o640), "production copy/edit metadata differs");
         ensure!(attr(&renamed, "security.selinux")? == label, "production copy/edit label differs");
+        ensure!(attr(&renamed, "security.capability")? == EMPTY_CAPABILITY, "production copy/edit capability xattr differs");
         skyward_files::delete(&[renamed], &cancel, &mut |_| {})?;
         ensure!(fs::read_dir(&copies)?.next().is_none(), "production delete left the fixture");
         ensure!(fs::read(root.join("android-canary.bin"))? == expected, "untouched Android canary differs");
         File::open(&restored)?.sync_all().context("sync restored fixture directory")?;
         File::open(root)?.sync_all()?;
-        println!("{{\"fixture_probe_passed\":true,\"archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
+        println!("{{\"fixture_probe_passed\":true,\"archive_sha256\":\"{}\",\"archive_digest_verified\":true,\"payload_bytes\":65536,\"ascii_unicode_contents\":true,\"selinux_owner_mode_times_xattr\":true,\"empty_capability_xattr_preserved\":true,\"inherited_fscrypt_v2_policy\":true,\"links_exclusions_and_sweep\":true,\"production_copy_rename_edit_delete\":true,\"android_canary_unchanged\":true}}", stored.sha256);
         Ok(())
     }
 }

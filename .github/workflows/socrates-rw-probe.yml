@@ -9,6 +9,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      - name: Verify capability preservation across a real owner change
+        run: |
+          cargo test --locked -p skyward-files --no-run --message-format=json > file-tests.json
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          reports = [json.loads(line) for line in pathlib.Path('file-tests.json').read_text().splitlines() if line.startswith('{')]
+          bins = [item['executable'] for item in reports if item.get('reason') == 'compiler-artifact' and item.get('target', {}).get('name') == 'skyward_files' and item.get('profile', {}).get('test') and item.get('executable')]
+          assert len(bins) == 1
+          subprocess.run(['sudo', bins[0], '--exact', 'tests::changing_owner_preserves_empty_file_capabilities', '--ignored', '--nocapture'], check=True)
+          PY
       - name: Build the fork-only Android fixture probe
         run: |
           mkdir -p crates/skyward-backup/examples
