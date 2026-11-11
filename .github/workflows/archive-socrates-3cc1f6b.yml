@@ -1,0 +1,26 @@
+name: Archive socrates 3cc1f6b candidate and complete source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: archive-socrates-3cc1f6b
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    if: github.repository == 'Dingtaiqi/skyward'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Archive the pinned candidate without publishing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/archive-socrates-3cc1f6b.py
