@@ -54,7 +54,16 @@ fn disposable_loopbacks_round_trip() {
         .unwrap();
     run("/system/bin/e2fsck", &["-f", "-n", SOURCE]);
     skyward_block::erase::make(Path::new(F2FS), "f2fs", &[], true).unwrap();
-    run("/system/bin/fsck.f2fs", &["-f", F2FS]);
+    // Unlike e2fsck's -f (force check), fsck.f2fs's -f forces repairs.
+    // Read the newly formatted device without that switch, and require
+    // the entire image to remain byte-identical during its check.
+    let before = store::digest(File::open(F2FS).unwrap(), 128 << 20, &mut |_| {}).unwrap();
+    run("/system/bin/fsck.f2fs", &[F2FS]);
+    let after = store::digest(File::open(F2FS).unwrap(), 128 << 20, &mut |_| {}).unwrap();
+    assert_eq!(
+        before, after,
+        "checking a new F2FS image must not silently repair it"
+    );
     println!("PASS real ext4 and f2fs formatting and independent filesystem checks");
 
     run("/bin/mount", &["-t", "ext4", SOURCE, "/fixture/source"]);

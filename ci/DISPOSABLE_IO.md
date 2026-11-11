@@ -6,7 +6,8 @@ The binary runs in a private mount namespace and a minimal chroot containing
 only the three loop nodes; no phone, real partition aliases, SSH, or USB tools
 are exposed. Failure is fatal and never becomes a skipped success.
 
-It checks real ext4/F2FS formatting with native filesystem checkers, a 64 MiB
+It checks real ext4/F2FS formatting with native filesystem checkers (the F2FS
+check omits repair flags and verifies the entire image remains unchanged), a 64 MiB
 block-device write and independent byte comparison, refusal of oversized writes,
 and compressed backup/restore on mounted ext4 including hardlinks, symlinks,
 permissions, stale-file removal, digest validation and protected exclusions.
