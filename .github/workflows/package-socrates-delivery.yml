@@ -1,0 +1,35 @@
+name: Package exact verified K60 Pro delivery
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        type: choice
+        options: [recovery]
+        default: recovery
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: socrates-delivery-${{ inputs.kind }}
+  cancel-in-progress: false
+jobs:
+  package:
+    if: github.repository == 'Dingtaiqi/skyward'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Render a clearly attributed K60 Pro preview from the tested UI source
+        run: python3 ci/render-socrates-recovery.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: recovery-k60pro-offline-render
+          path: delivery/socrates/recovery/screenshots/Recovery-K60Pro-离线渲染.png
+          retention-days: 7
+          if-no-files-found: error
+      - name: Package the pinned image and reviewed Chinese documentation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/package-socrates-delivery.py '${{ inputs.kind }}'
