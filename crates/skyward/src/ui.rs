@@ -2328,7 +2328,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             app.tools_finished(Err("another operation is still running".into()));
                             continue;
                         }
-                        match recovery_tools::Worker::start(recovery_tools::Task::Module { id, operation }) {
+                        match recovery_tools::Worker::start(recovery_tools::Task::Module { id, operation }, app.state.lang) {
                             Ok(worker) => tool_worker = Some(worker),
                             Err(e) => app.tools_finished(Err(format!("{e:#}"))),
                         }
@@ -2353,7 +2353,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             };
                             Ok(recovery_tools::Task::Avb { expected: status, checks, backup: Box::new(backup) })
                         })();
-                        match task.and_then(recovery_tools::Worker::start) {
+                        match task.and_then(|task| recovery_tools::Worker::start(task, app.state.lang)) {
                             Ok(worker) => tool_worker = Some(worker),
                             Err(e) => app.tools_finished(Err(format!("{e:#}"))),
                         }

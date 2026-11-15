@@ -45,7 +45,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn start(task: Task) -> Result<Self> {
+    pub fn start(task: Task, lang: skyward_ui::Lang) -> Result<Self> {
         let mut fds = [0; 2];
         ensure!(
             unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } == 0,
@@ -56,8 +56,8 @@ impl Worker {
         let (send, events) = mpsc::channel();
         let thread = thread::Builder::new().name("recovery-tools".into()).spawn(move || {
             let result = match task {
-                Task::Module { id, operation } => modules(id.as_deref(), operation),
-                Task::Avb { expected, checks, backup } => disable_avb(expected, checks, *backup),
+                Task::Module { id, operation } => modules(id.as_deref(), operation, lang),
+                Task::Avb { expected, checks, backup } => disable_avb(expected, checks, *backup, lang),
             }
             .map_err(|e| format!("{e:#}"));
             let _ = send.send(result);
@@ -101,7 +101,7 @@ pub fn avb_status() -> Result<AvbStatus> {
     })
 }
 
-fn disable_avb(expected: AvbStatus, checks: [bool; 2], backup: backup::BackupTask) -> Result<String> {
+fn disable_avb(expected: AvbStatus, checks: [bool; 2], backup: backup::BackupTask, lang: skyward_ui::Lang) -> Result<String> {
     ensure!(
         expected.unlocked && expected.snapshot == SnapshotState::None,
         "an unlocked bootloader and no OTA snapshot are required"
@@ -137,10 +137,13 @@ fn disable_avb(expected: AvbStatus, checks: [bool; 2], backup: backup::BackupTas
         Ok(())
     })();
     apply.with_context(|| format!("AVB operation incomplete; original backup is in {}", folder.display()))?;
-    Ok(format!(
-        "AVB flags updated and read back on slot {}. Original backup: {}",
-        expected.slot.letter(),
-        folder.display()
+    let slot = expected.slot.letter();
+    let path = folder.display().to_string();
+    Ok(skyward_ui::tr!(
+        lang,
+        "已修改槽位 {slot} 的 AVB 标志并读回校验。原始备份：{path}",
+        "已修改槽位 {slot} 的 AVB 標記並讀回驗證。原始備份：{path}",
+        "AVB flags updated and read back on slot {slot}. Original backup: {path}"
     ))
 }
 
@@ -151,7 +154,8 @@ fn cache_stamp() -> Vec<(PathBuf, u64, i64, i64)> {
         .collect()
 }
 
-fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
+fn modules(id: Option<&str>, operation: Operation, lang: skyward_ui::Lang) -> Result<String> {
+    let metadata = Path::new("/metadata");
     ensure!(
         mount::is_mount_point(Path::new("/data"))? && !mount::is_read_only(Path::new("/data"))?,
         "open data writable before managing modules"
@@ -178,65 +182,71 @@ fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
         );
     }
     let before = cache_stamp();
-    let mut cached = !before.is_empty();
-    for id in &ids { cached |= root::preinit_present(Path::new("/metadata"), id)?; }
-    let ksud = ["/data/adb/ksud", "/data/adb/ksu/bin/ksud"]
-        .into_iter()
-        .find_map(|p| fs::canonicalize(p).ok().filter(|p| p.starts_with(ADB) && p.is_file()));
+    let mut refresh = None;
     if catalog.kernelsu {
-        ensure!(
-            mount::is_mount_point(Path::new("/metadata"))?,
-            "mount metadata before managing KernelSU modules"
-        );
-        ensure!(
-            !cached || ksud.is_some(),
-            "KernelSU preinit cache exists but its matching ksud is missing"
-        );
+        ensure!(mount::is_mount_point(metadata)?, "mount metadata before managing KernelSU modules");
+        let context = root::cache_context(metadata)?;
+        let enabling = matches!(operation, Operation::Enable | Operation::UndoRemove);
+        let source_has = |name: &str| {
+            ids.iter().any(|id| {
+                ["modules", "modules_update"]
+                    .iter()
+                    .any(|parent| Path::new(ADB).join(parent).join(id).join(name).is_dir())
+            })
+        };
+        let needs_preinit = enabling && source_has("preinit");
+        let needs_refresh = !context.active_roots.is_empty() || (enabling && source_has("initrc")) || needs_preinit;
+        if needs_refresh {
+            let program = ["/data/adb/ksud", "/data/adb/ksu/bin/ksud"]
+                .into_iter()
+                .find_map(|p| fs::canonicalize(p).ok().filter(|p| p.starts_with(ADB) && p.is_file()))
+                .context("active KernelSU init caches require the matching installed ksud")?;
+            let info = bounded(&program, &["debug", "info"]).context("check the recovery kernel before changing any module")?;
+            root::validate_refresh(&info, metadata, &context, needs_preinit)?;
+            refresh = Some(program);
+        }
     }
     for id in &ids {
         root::change(Path::new(ADB), id, operation)?;
     }
-    if catalog.kernelsu {
-        if let Some(ksud) = ksud {
-            let readonly = mount::is_read_only(Path::new("/metadata"))?;
-            if readonly {
-                mount::remount_writable(Path::new("/metadata"), true)?;
-            }
-            let refreshed = bounded_refresh(&ksud);
-            let restored = if readonly {
-                mount::remount_writable(Path::new("/metadata"), false)
-            } else {
-                Ok(())
-            };
-            restored.context("restore metadata mount mode after refreshing KernelSU")?;
-            let required = cached
-                || ids.iter().any(|id| {
-                    ["initrc", "preinit"].iter().any(|name| {
-                        ["modules", "modules_update"]
-                            .iter()
-                            .any(|parent| Path::new(ADB).join(parent).join(id).join(name).is_dir())
-                    })
-                });
-            if required {
-                refreshed.context("module markers saved, but KernelSU preinit refresh failed")?;
+    if let Some(program) = refresh {
+        let readonly = mount::is_read_only(metadata)?;
+        if readonly {
+            mount::remount_writable(metadata, true).context("module markers saved, but metadata could not be made writable")?;
+        }
+        let refreshed = bounded(&program, &["initrc", "refresh"]);
+        let restored = if readonly {
+            mount::remount_writable(metadata, false)
+        } else {
+            Ok(())
+        };
+        restored.context("restore metadata mount mode after refreshing KernelSU")?;
+        refreshed.context("module markers saved, but KernelSU init cache refresh failed")?;
+        ensure!(
+            cache_stamp() != before,
+            "module markers saved, but no refreshed KernelSU init cache was verified"
+        );
+        if matches!(operation, Operation::Disable | Operation::Remove) {
+            for id in &ids {
                 ensure!(
-                    cache_stamp() != before,
-                    "module markers saved, but no refreshed KernelSU preinit cache was verified"
+                    !root::preinit_present(metadata, id)?,
+                    "module markers saved, but cached preinit programs of {id} remain enabled"
                 );
-                if matches!(operation, Operation::Disable | Operation::Remove) {
-                    for id in &ids {
-                        ensure!(!root::preinit_present(Path::new("/metadata"), id)?, "module markers saved, but cached preinit programs of {id} remain enabled");
-                    }
-                }
             }
         }
     }
-    Ok(format!("{} module(s) updated; changes take effect next normal boot.", ids.len()))
+    let count = ids.len();
+    Ok(skyward_ui::tr!(
+        lang,
+        "已更改 {count} 个模块，下次正常启动时生效。",
+        "已變更 {count} 個模組，下次正常啟動時生效。",
+        "{count} module(s) updated; changes take effect next normal boot."
+    ))
 }
 
 /// No shell, no module script, bounded time and output. In particular an
 /// installed ksud cannot block the recovery's UI or fill its log memory.
-fn bounded_refresh(program: &Path) -> Result<()> {
+fn bounded(program: &Path, args: &[&str]) -> Result<String> {
     let mut fds = [0; 2];
     ensure!(
         unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } == 0,
@@ -249,7 +259,7 @@ fn bounded_refresh(program: &Path) -> Result<()> {
         "make ksud output nonblocking"
     );
     let mut child = Command::new(program)
-        .args(["initrc", "refresh"])
+        .args(args)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(writer.try_clone()?)
@@ -293,7 +303,7 @@ fn bounded_refresh(program: &Path) -> Result<()> {
                     status.success() && !said.contains("regenerate preinit failed"),
                     "ksud refresh failed: {said}"
                 );
-                return Ok(());
+                return Ok(said.into_owned());
             }
         }
         if started.elapsed() > Duration::from_secs(10) || bytes.len() > 256 * 1024 {

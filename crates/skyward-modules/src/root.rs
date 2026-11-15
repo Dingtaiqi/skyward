@@ -33,6 +33,88 @@ pub struct Catalog {
     pub legacy_image: bool,
 }
 
+#[derive(Debug, Default)]
+pub struct CacheContext {
+    pub active_roots: Vec<std::path::PathBuf>,
+    pub preinit: bool,
+}
+
+/// Empty modules.rc files need no rewrite for ordinary marker changes.
+/// Nonempty init scripts and copied preinit programs require the matching
+/// kernel interface before the installed ksud may rebuild their caches.
+pub fn cache_context(metadata: &Path) -> Result<CacheContext> {
+    let mut context = CacheContext::default();
+    for base in ["vold/ksu", "watchdog/ksu", "ksu"] {
+        let path = metadata.join(base);
+        let dir = match Dir::open(&path) {
+            Ok(dir) => dir,
+            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == ErrorKind::NotFound) => continue,
+            Err(e) => return Err(e),
+        };
+        let mut active = false;
+        match dir.file("modules.rc", libc::O_RDONLY | libc::O_NONBLOCK) {
+            Ok(file) => {
+                ensure!(file.metadata()?.is_file(), "modules.rc is not a regular file");
+                let mut bytes = Vec::new();
+                file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+                ensure!(bytes.len() <= 1024 * 1024, "KernelSU init cache is too large");
+                active |= bytes.iter().any(|b| !b.is_ascii_whitespace());
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("inspect KernelSU init cache"),
+        }
+        if let Some(preinit) = optional_child(&dir, "preinit")? {
+            if preinit.names()?.iter().any(|name| !name.starts_with('.')) {
+                context.preinit = true;
+                active = true;
+            }
+        }
+        if active {
+            context.active_roots.push(path);
+        }
+    }
+    Ok(context)
+}
+
+pub fn validate_refresh(info: &str, metadata: &Path, context: &CacheContext, needs_preinit: bool) -> Result<()> {
+    let value = |key: &str| -> Result<u32> {
+        let raw = info
+            .lines()
+            .find_map(|line| {
+                line.split_once(':')
+                    .filter(|(name, _)| name.trim() == key)
+                    .map(|(_, value)| value.trim())
+            })
+            .with_context(|| format!("ksud did not report kernel {key}"))?;
+        if let Some(hex) = raw.strip_prefix("0x") {
+            Ok(u32::from_str_radix(hex, 16)?)
+        } else {
+            Ok(raw.parse()?)
+        }
+    };
+    ensure!(value("version")? > 0, "the recovery kernel has no compatible KernelSU interface");
+    let uapi = value("uapi_version")?;
+    ensure!(uapi > 0, "the recovery kernel's KernelSU API is unknown");
+    let flags = value("flags")?;
+    // KernelSU uapi/supercall.h: KSU_GET_INFO_FLAG_PREINIT = 1U << 5.
+    ensure!(
+        !(context.preinit || needs_preinit) || flags & (1 << 5) != 0,
+        "the recovery kernel cannot preserve KernelSU preinit programs"
+    );
+    let expected = if uapi >= 6 && metadata.join("vold").is_dir() {
+        metadata.join("vold/ksu")
+    } else if metadata.join("watchdog").is_dir() {
+        metadata.join("watchdog/ksu")
+    } else {
+        metadata.join("ksu")
+    };
+    ensure!(
+        context.active_roots.iter().all(|p| *p == expected),
+        "the recovery kernel would migrate a different KernelSU cache layout"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
     Enable,
@@ -340,5 +422,32 @@ mod tests {
         fs::create_dir_all(metadata.path().join("vold/ksu/preinit/example")).unwrap();
         assert!(preinit_present(metadata.path(), "example").unwrap());
         assert!(preinit_present(metadata.path(), "../other").is_err());
+    }
+
+    #[test]
+    fn ordinary_markers_do_not_require_rebuilding_an_empty_cache() {
+        let metadata = tempfile::tempdir().unwrap();
+        fs::create_dir_all(metadata.path().join("watchdog/ksu")).unwrap();
+        fs::write(metadata.path().join("watchdog/ksu/modules.rc"), "\n").unwrap();
+        assert!(cache_context(metadata.path()).unwrap().active_roots.is_empty());
+        fs::write(metadata.path().join("watchdog/ksu/modules.rc"), "on boot\n").unwrap();
+        assert_eq!(
+            cache_context(metadata.path()).unwrap().active_roots,
+            [metadata.path().join("watchdog/ksu")]
+        );
+    }
+
+    #[test]
+    fn refresh_rejects_an_absent_kernel_driver_or_a_different_layout() {
+        let metadata = tempfile::tempdir().unwrap();
+        fs::create_dir_all(metadata.path().join("vold/ksu")).unwrap();
+        let context = CacheContext {
+            active_roots: vec![metadata.path().join("vold/ksu")],
+            preinit: true,
+        };
+        assert!(validate_refresh("version: 0\nuapi_version: 0\nflags: 0x0", metadata.path(), &context, false).is_err());
+        assert!(validate_refresh("version: 40000\nuapi_version: 5\nflags: 0x20", metadata.path(), &context, false).is_err());
+        assert!(validate_refresh("version: 40000\nuapi_version: 6\nflags: 0x0", metadata.path(), &context, false).is_err());
+        validate_refresh("version: 40000\nuapi_version: 6\nflags: 0x20", metadata.path(), &context, false).unwrap();
     }
 }
