@@ -146,7 +146,7 @@ pub fn module(cx: &Ctx) -> Frame {
             t,
             f,
             y,
-            &format!("{}\n{} · {}\n{}", m.id, m.version, m.author, m.description),
+            &format!("{}\n{}\n{} · {}\n{}", m.name, m.id, m.version, m.author, m.description),
         );
         if let Some(why) = &m.problem {
             y = widgets::paragraph(&mut c, t, f, y, why);

@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 mod matcher;
+mod tools;
 
 const CLOCK: &str = "23:46";
 
@@ -148,6 +149,7 @@ fn main() -> Result<()> {
     let light = Theme::light(w, h, ppd);
 
     match args.get(2).map(String::as_str) {
+        Some("--tools") => return tools::render(&out, &fonts, &cfg),
         Some("--calibrate") => {
             let path = out.join("calibrate.png");
             write_png(&path, &calibrate(&fonts, &light)?)?;

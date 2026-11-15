@@ -2461,6 +2461,8 @@ dependencies = [
  "anyhow",
  "png",
  "serde",
+ "skyward-backup",
+ "skyward-modules",
  "skyward-config",
  "skyward-info",
  "skyward-install",
