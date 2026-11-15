@@ -1836,15 +1836,15 @@ pub fn backup(cx: &Ctx) -> Frame {
         .enumerate()
         .map(|(k, (name, sub))| Row::new(l.pick(*name)).subtitle(sub).trail(Trail::Check(s.backup[k])))
         .collect();
-    let parts = widgets::list(&mut c, t, f, y, &rows);
-    out.extend(hits(&parts.rows, &[0, 1, 2, 3].map(Action::BackupPart)));
     let selection = s.backup_include.as_ref().map(|names| {
         let count = names.len();
         tr!(l, "已选择 {count} 项", "已選擇 {count} 項", "{count} selected")
-    }).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).to_owned());
-    let custom = widgets::list(&mut c, t, f, parts.bottom + t.m.card_gap, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selection)]);
+    }).unwrap_or_else(|| l.pick(["按下方分组选择", "按下方群組選擇", "Using the groups below"]).to_owned());
+    let custom = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selection)]);
     out.extend(hits(&custom.rows, &[Action::Open(Screen::BackupPartitions)]));
-    let y = widgets::section(&mut c, t, f, custom.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
+    let parts = widgets::list(&mut c, t, f, custom.bottom + t.m.card_gap, &rows);
+    out.extend(hits(&parts.rows, &[0, 1, 2, 3].map(Action::BackupPart)));
+    let y = widgets::section(&mut c, t, f, parts.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
     let storage = match (s.data.storage_open(), i.storage.free.map(fmt::gb)) {
         (true, Some(free)) => tr!(l, "剩余 {free}", "剩餘 {free}", "{free} free"),
         (true, None) => l.pick(["无法读取剩余空间", "無法讀取剩餘空間", "Free space unknown"]).to_string(),
@@ -1960,18 +1960,19 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                 let y = widgets::section(&mut c, t, f, y, l.pick(["恢复内容", "還原內容", "Contents"]));
                 let kept: Vec<usize> = (0..BACKUP_PARTS.len()).filter(|&k| held.parts[k]).collect();
                 let rows: Vec<Row> = kept.iter().map(|&k| Row::new(l.pick(BACKUP_PARTS[k])).trail(Trail::Check(chosen[k]))).collect();
-                let list = widgets::list(&mut c, t, f, y, &rows);
-                out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit { rect, action: Action::RestorePart(k) }));
-                let mut bottom = list.bottom;
+                let mut top = y;
                 if !held.partitions.is_empty() {
                     let selected = s.restore_include.as_ref().map(|names| {
                         let count = names.len();
                         tr!(l, "已选择 {count} 项", "已選擇 {count} 項", "{count} selected")
-                    }).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).into());
-                    let custom = widgets::list(&mut c, t, f, bottom + t.m.card_gap, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selected)]);
+                    }).unwrap_or_else(|| l.pick(["按下方分组选择", "按下方群組選擇", "Using the groups below"]).into());
+                    let custom = widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selected)]);
                     out.extend(hits(&custom.rows, &[Action::Open(Screen::RestorePartitions)]));
-                    bottom = custom.bottom;
+                    top = custom.bottom + t.m.card_gap;
                 }
+                let list = widgets::list(&mut c, t, f, top, &rows);
+                out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit { rect, action: Action::RestorePart(k) }));
+                let bottom = list.bottom;
                 let note = l.pick(["恢复后，所选内容的现有数据将被备份覆盖。", "還原後，所選內容的現有資料將被備份覆寫。", "Restoring writes the backup over what the parts chosen hold now."]);
                 let mut y = widgets::footnote(&mut c, t, f, bottom, note);
                 if chosen[2] {

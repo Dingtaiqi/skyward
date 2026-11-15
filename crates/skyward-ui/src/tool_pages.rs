@@ -341,7 +341,7 @@ pub fn partitions(cx: &Ctx, restore: bool) -> Frame {
             {
                 let x = t.m.margin + k as f32 * (w + gap);
                 c.fill_round_rect(x, y, w, h, h / 2.0, t.pal.card);
-                c.text_vc(&f.heading, label, x + t.m.inner, y + h / 2.0, t.m.sub_px, t.pal.accent, Some(w - t.m.inner * 2.0));
+                c.text_center(&f.heading, label, x + w / 2.0, y + h / 2.0, t.m.sub_px, t.pal.accent);
                 out.push(Hit { rect: Rect::new(x, y, w, h), action: Action::BackupItemsAll(all) });
             }
             y += h;
