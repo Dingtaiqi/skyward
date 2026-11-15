@@ -1,6 +1,25 @@
 # myron: stock evidence and recovery bring-up
 
 This is an experimental recovery port with incomplete release acceptance.
+
+On 2026-11-15, the v0.2.2 executable from the published CI run was tested
+through a tmpfs bind over the installed recovery's executable. Display,
+touch, decryption, four inert-module marker operations on active/staged
+copies, an independently verified 128 KiB vbmeta backup, restore selection,
+AVB status and the online latest-version check passed within that scope.
+The original 15 module directories' markers and five protected a-slot
+partition hashes were unchanged after returning to HyperOS; fixtures were
+removed. No AVB modification or partition restore was performed, and this
+does not establish native boot acceptance of the complete v0.2.2 image.
+The owner also reported an automatic reboot while the screen was lit and
+idle. Its cause remains undetermined: boot-reason properties said recovery
+and pstore was empty. Stability is not accepted on that evidence. See
+`recovery_tools_20261115` in `myron-validation.json` for exact scope and
+follow-up results. A later idle-only comparison ran the original executable
+for 121 seconds and v0.2.2 for 483 seconds without a phone or recovery-process
+restart. It used no decryption or networking and did not reproduce the
+earlier workload; the unexplained event remains open.
+
 Native recovery_b tests verified display/touch, exact running payloads,
 StrongBox startup, both shared-secret peers and Weaver getConfig (64/16/16).
 A separately authorized 759d4d2 test also converted an inner wrapped storage

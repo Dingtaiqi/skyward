@@ -1,12 +1,82 @@
 {
   "device": "myron",
-  "status": "experimental; official full OTA engine success and updated HyperOS a boot/owner original-file acceptance passed; corrected Kept recovery-preservation retry and native recovery a boot verified; normal snapshot OTA and premature GUI progress remain open; MTP investigation paused by owner",
-  "date": "2026-11-13",
+  "status": "experimental; official OTA and retained recovery native boot previously verified; v0.2.2 new tools functional checks passed with a RAM executable overlay; spontaneous lit-idle reboot observed and unresolved; no full v0.2.2 image installation or AVB/restore write acceptance",
+  "date": "2026-11-15",
   "stock_version": "OS4.0.6.0.XPMCNXM",
   "framework_api": 37,
   "vendor_api": 36,
   "hardware_slot": "a",
   "bootloader_unlocked_confirmed_by_fastboot": true,
+  "recovery_tools_20261115": {
+    "version": "0.2.2",
+    "commit": "f2d9a3aa20a50f41d4f191212a8a16406aa3482f",
+    "ci_run": 43708465658,
+    "program_sha256": "6ae0415679d58769c84ef0f79806b1f7c4620a623ed402494c439a59d4fbd98b",
+    "mode": "Native boot of the installed recovery_a, then a verified v0.2.2 executable bind-mounted from tmpfs; installed configuration and native Weaver library unchanged. No recovery or other protected partition was flashed. This is not a native boot acceptance test of the complete v0.2.2 release image.",
+    "display_touch_and_decryption": "owner confirmed normal display/touch, successful decryption and module list visibility",
+    "module_management": {
+      "fixture": "one inert module with module.prop only, initially disabled, present in both active and staged standard module directories",
+      "confirmed_operations": ["enable", "disable", "remove_next_boot", "undo_remove"],
+      "verification": "actual disable/remove markers matched each operation in both copies",
+      "first_attempt": "an earlier success report left disable markers; a controlled selection and submission verified Enable. No backend defect established.",
+      "fixture_cleaned": true,
+      "original_module_directory_count": 15,
+      "original_module_markers_unchanged_after_return": true,
+      "limits": "no real module changed; no bulk-disable acceptance or separate Magisk installation tested"
+    },
+    "backup": {
+      "selected": ["vbmeta"],
+      "bytes": 131072,
+      "sha256": "a1613db03b037ae1e3affe85f85f51a5e94014e9a91df6cd17ccaa5aa55562d5",
+      "manifest_exactly_one_partition": true,
+      "full_host_readback_equals_source_partition": true,
+      "owner_confirmed_verification_success": true,
+      "copies_retained": "phone internal storage and host"
+    },
+    "restore": {
+      "owner_confirmed_only_vbmeta_selectable": true,
+      "partition_restore_written": false
+    },
+    "avb": {
+      "partition": "vbmeta_a",
+      "flags": 0,
+      "owner_confirmed_both_checks_enabled_without_unlock_warning": true,
+      "vbmeta_modified": false
+    },
+    "wifi_update": "owner confirmed online, already latest, published version 0.2.2; no online update installation requested",
+    "spontaneous_reboot": {
+      "owner_confirmed_automatic": true,
+      "owner_context": "screen lit, idle",
+      "controller_requested_reboot_before_event": false,
+      "boot_reason_properties": "recovery",
+      "pstore_empty_after_return": true,
+      "cause": "undetermined; no panic or watchdog failure proven",
+      "stability_accepted": false,
+      "followup": {
+        "mode": "screen-off disabled using a RAM-only overlay of the recovery settings directory; host-sampled recovery and kernel diagnostics",
+        "original_idle_seconds": 121,
+        "v022_idle_seconds": 483,
+        "whole_phone_reboot_observed": false,
+        "recovery_process_restart_observed": false,
+        "original_startup_usb_interruption": "one temporary disconnect after the controlled GUI restart; unchanged kernel boot ID after reconnect",
+        "data_decrypted": false,
+        "network_used": false,
+        "protected_partitions_unchanged_after_return": true,
+        "original_module_markers_unchanged_after_return": true,
+        "persistent_recovery_settings_unchanged": true,
+        "owner_confirmed_hyperos_unlock_desktop_original_files": true,
+        "interpretation": "The bounded idle-only test did not reproduce the earlier event. It does not prove a fix or accept stability after the earlier decrypted/networked feature-test workload."
+      }
+    },
+    "protected_a_partition_hashes_unchanged_after_spontaneous_return": {
+      "boot_a": "11a20858d4e68869152baf70db0edb3d279516f9d430154cc6c96ba427940748",
+      "recovery_a": "e5a50649935babcda4e7710feab978e912e468118748ab1f057f54c63c745439",
+      "init_boot_a": "16fe0d13a080e1eb24602b1270f4f2d91e0e82dd8f892062a7e538b4c0dad727",
+      "vendor_boot_a": "be20df3134e6fb1047f0db1b50e3e4fdcaa993847bdb476b8246d7b903ec4076",
+      "vbmeta_a": "a1613db03b037ae1e3affe85f85f51a5e94014e9a91df6cd17ccaa5aa55562d5"
+    },
+    "privacy": "sanitized outcomes and public component hashes only; no raw diagnostics, device identifiers, credentials, encryption keys or personal file names"
+  },
   "hyperos_mtp_control_20261113": {
     "scope": "Normal HyperOS only; one own 65536-byte file in a fresh Download child directory; no reboot, flash, driver changes or other user-file operations",
     "owner_report": "MTP also hangs under HyperOS when copying or deleting files",
