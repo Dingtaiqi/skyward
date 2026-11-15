@@ -1,7 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use sha2::{Digest, Sha256};
-use skyward_config::ramdisk as paths;
+use skyward_config::{ramdisk as paths, PatchLevel};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -55,9 +55,18 @@ enum Cmd {
         /// statically.
         #[arg(long)]
         system_init: PathBuf,
+        /// Static AArch64 Bash bundle made by .github/scripts/build-bash.sh:
+        /// bash, COPYING, musl-COPYRIGHT and SOURCE. Omit only when building
+        /// without support for scripts that require Bash.
+        #[arg(long)]
+        bash_dir: Option<PathBuf>,
         /// The device configuration, devices/<codename>.toml.
         #[arg(long)]
         config: PathBuf,
+        /// Optional recovery-only system patch-date floor for existing data
+        /// keys. Does not change the ROM or enable key upgrades.
+        #[arg(long)]
+        system_patchlevel_floor: Option<PatchLevel>,
         /// The UI typeface.
         #[arg(long)]
         font: PathBuf,
@@ -113,7 +122,7 @@ fn main() -> Result<()> {
             img.kernel = BootImage::read(&kernel)?.kernel;
             write(&out, &img, &img.to_bytes()?)
         }
-        Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, library, myron_diagnostics, out } => {
+        Cmd::Recovery { stock, binary, system_init, bash_dir, config, system_patchlevel_floor, font, mono, mono_license, library, myron_diagnostics, out } => {
             let size = partition_size(&stock)?;
             let mut img = BootImage::read(&stock)?;
             let mut rd = Ramdisk::decode(&img.ramdisk)?;
@@ -123,7 +132,12 @@ fn main() -> Result<()> {
                 anyhow::bail!("{} holds {}, which is not a stock recovery", stock.display(), e.name);
             }
             let read = |p: &PathBuf| std::fs::read(p).with_context(|| format!("read {}", p.display()));
-            let cfg = skyward_config::DeviceConfig::load(&config)?;
+            let text = String::from_utf8(read(&config)?).context("device configuration is not UTF-8")?;
+            let text = match system_patchlevel_floor {
+                Some(floor) => skyward_config::DeviceConfig::with_system_patchlevel_floor(&text, floor)?,
+                None => text,
+            };
+            let cfg = skyward_config::DeviceConfig::parse(&text)?;
             for replacement in cfg.services.iter().flat_map(|s| &s.library_overrides) {
                 let name = Path::new(&replacement.source).file_name().context("a library override needs a basename")?;
                 ensure!(library.iter().any(|p| p.file_name().is_some_and(|n| n == name)),
@@ -138,7 +152,10 @@ fn main() -> Result<()> {
                 rd.link(command, recovery)?;
             }
             rd.add(paths::SYSTEM_INIT, 0o755, read(&system_init)?)?;
-            rd.add(paths::CONFIG, 0o644, read(&config)?)?;
+            if let Some(dir) = &bash_dir {
+                add_bash(&mut rd, dir)?;
+            }
+            rd.add(paths::CONFIG, 0o644, text.into_bytes())?;
             rd.add(paths::FONT, 0o644, read(&font)?)?;
             rd.add(paths::MONO, 0o644, read(&mono)?)?;
             rd.add(paths::MONO_LICENSE, 0o644, read(&mono_license)?)?;
@@ -187,6 +204,23 @@ fn main() -> Result<()> {
             }
         }
     }
+}
+
+/// Keep the shell, its licences and the exact source/build reference
+/// together. A stock ramdisk's shell at /system/bin/sh is never replaced.
+fn add_bash(rd: &mut Ramdisk, dir: &Path) -> Result<()> {
+    for (source, target, mode) in [
+        ("bash", "system/bin/bash", 0o755),
+        ("COPYING", "skyward/licenses/bash-COPYING", 0o644),
+        ("musl-COPYRIGHT", "skyward/licenses/musl-COPYRIGHT", 0o644),
+        ("SOURCE", "skyward/licenses/bash-SOURCE", 0o644),
+    ] {
+        let path = dir.join(source);
+        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        ensure!(!bytes.is_empty(), "{} is empty", path.display());
+        rd.add(target, mode, bytes)?;
+    }
+    Ok(())
 }
 
 /// The partition a recovery is made on, as a full update package names it.
@@ -338,7 +372,7 @@ mod tests {
         let stock = format!("{DELETE_METADATA_KEYS}=true\nro.vndk.version=33\n");
         let disabled = format!("{DELETE_METADATA_KEYS}=false");
         let enabled = format!("{DELETE_METADATA_KEYS}=true");
-        let policy = skyward_config::Decrypt { read_only: false, auto_repair: false, key_upgrades: false, storage_key_renewal: false };
+        let policy = skyward_config::Decrypt { read_only: false, auto_repair: false, key_upgrades: false, ..Default::default() };
         let props = String::from_utf8(recovery_properties(stock.as_bytes(), policy.preserves_keys())).unwrap();
         assert!(props.lines().any(|line| line == disabled));
         assert!(!props.lines().any(|line| line == enabled));

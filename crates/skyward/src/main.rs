@@ -106,6 +106,16 @@ enum Cmd {
     Mount,
     /// Unmount what `mount` mounted and remove its device-mapper devices.
     Umount,
+    /// Report partitions kept by private service mount namespaces. With
+    /// --cycle, test the installer's detach and immediately remount them
+    /// read-only, without running an installer or writing any partition.
+    #[cfg(target_os = "android")]
+    InstallMounts {
+        #[arg(long, default_value = "/skyward/device.toml")]
+        config: String,
+        #[arg(long)]
+        cycle: bool,
+    },
     /// Print where an update stands: its state, the slot it came from, each
     /// snapshot as libsnapshot keeps it and as the kernel maps it, and the
     /// kernel's snapshot targets.
@@ -169,6 +179,12 @@ enum Cmd {
         /// Read the service's hardware information without opening any key.
         #[arg(long, conflicts_with = "alias")]
         info_only: bool,
+        /// Explicit diagnostic: permit the one upgradeKey retry of the
+        /// metadata wrapping key in memory. No disk key is rewritten,
+        /// but the secure world may change internal state. Never enables
+        /// upgrades on the data or UI decryption paths.
+        #[arg(long, conflicts_with_all = ["info_only", "alias"])]
+        upgrade_memory: bool,
         #[arg(long, default_value = "/metadata/vold/metadata_encryption/key")]
         key: PathBuf,
         /// Report instead what the key service keeps under this name, such
@@ -294,6 +310,8 @@ fn main() -> Result<()> {
         }
         Cmd::Umount => skyward_vab::unmount_partitions(booted_slot()?),
         #[cfg(target_os = "android")]
+        Cmd::InstallMounts { config, cycle } => install_mounts(&config, cycle),
+        #[cfg(target_os = "android")]
         Cmd::Services { config } => {
             let props = skyward_info::installed_props(booted_slot()?)?;
             let mut services = DeviceConfig::load(&config)?.services;
@@ -344,9 +362,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         #[cfg(target_os = "android")]
-        Cmd::Keymint { key, alias, info_only } => {
+        Cmd::Keymint { key, alias, info_only, upgrade_memory } => {
             let binder = skyward_binder::driver::Binder::open()?;
-            let service = skyward_crypto::keymint::KeyMint::open(&binder)?.without_upgrades();
+            let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
+            let service = if upgrade_memory { service } else { service.without_upgrades() };
             let hw = service.hardware()?;
             println!("keymint {} version {} at security level {} by {}", hw.name, hw.version, hw.security_level, hw.author);
             if info_only {
@@ -365,8 +384,12 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let stored = skyward_crypto::keystore::StoredKey::load(&key)?;
-            for (tag, value) in stored.authorizations(&service)? {
-                println!("  tag {tag} = {value}");
+            if upgrade_memory {
+                println!("explicit in-memory upgrade retry allowed; disk key files are not rewritten");
+            } else {
+                for (tag, value) in stored.authorizations(&service)? {
+                    println!("  tag {tag} = {value}");
+                }
             }
             let raw = stored.unwrap(skyward_crypto::keystore::Unwrap::Hardware(&service))?;
             println!("{} holds a key of {} bytes", key.display(), raw.len());
@@ -463,6 +486,63 @@ fn booted_slot() -> Result<skyward_vab::Slot> {
     skyward_vab::current_slot()?.context("not an A/B device")
 }
 
+/// Exercise only the installer's mount preparation, restoring the system
+/// mounts even if detach fails. Locked files live until this command ends;
+/// it must not leave an installer to run after that.
+#[cfg(target_os = "android")]
+fn install_mounts(config: &str, cycle: bool) -> Result<()> {
+    use anyhow::ensure;
+    use std::fs;
+    let cfg = DeviceConfig::load(config)?;
+    ensure!(
+        skyward_sys::prop("ro.product.device").as_deref() == Some(cfg.device.codename.as_str()),
+        "the configuration is for another device"
+    );
+    let slot = booted_slot()?;
+    let props = skyward_info::installed_props(slot)?;
+    let services: Vec<_> = cfg.services.into_iter().filter(|s| s.runs_on(&props)).collect();
+    let mounted = skyward_vab::mounted_partitions(slot)?;
+    for point in services::private_mounts(&services, &mounted)? {
+        println!("kept by a private namespace: {}", point.display());
+    }
+    if !cycle {
+        return Ok(());
+    }
+    let recovery = services::running("/system/bin/recovery").context("the recovery service is not running")?;
+    ensure!(
+        fs::read_link(format!("/proc/{recovery}/ns/mnt"))? == fs::read_link("/proc/self/ns/mnt")?,
+        "not in the recovery's mount namespace"
+    );
+    ensure!(skyward_vab::snapshot_state()? == SnapshotState::None, "an update snapshot is outstanding");
+    for process in procfs::process::all_processes().context("list running processes")? {
+        let process = process.context("open a running process")?;
+        let args = match process.cmdline() {
+            Ok(args) => args,
+            Err(procfs::ProcError::NotFound(_)) => continue,
+            Err(e) => return Err(e).context("check for running installers"),
+        };
+        ensure!(
+            !args.iter().any(|a| matches!(
+                Path::new(a).file_name().and_then(|n| n.to_str()),
+                Some("update-binary" | "update_engine" | "update_engine_sideload" | "updater")
+            )),
+            "an installer is running"
+        );
+    }
+    let busy = services::pin(&services, &mounted)?;
+    let detached = skyward_vab::release_partitions(slot, &busy).context("detach the installed system");
+    let restored = skyward_vab::mount_partitions(slot).context("restore the read-only system mounts");
+    match (detached, restored) {
+        (Ok(()), Ok(mounts)) => {
+            println!("detach succeeded; restored {} read-only system mounts; no installer was run", mounts.partitions.len());
+            Ok(())
+        }
+        (Err(e), Ok(_)) => Err(e.context("read-only system mounts restored after detach failed")),
+        (Ok(()), Err(e)) => Err(e),
+        (Err(e), Err(r)) => Err(e.context(format!("restoring the system mounts failed too: {r:#}"))),
+    }
+}
+
 fn lp(super_dev: &Path, slot: Option<u32>) -> Result<()> {
     let slot = match slot {
         Some(n) => n,
@@ -526,7 +606,7 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<()> {
     let nodes = skyward_sys::ueventd::apply()?;
     skyward_sys::kmsg(&format!("{nodes} device nodes given the owner their phone describes"))?;
     let props = skyward_info::installed_props(slot)?;
-    adopt_installed_version(&props)?;
+    adopt_installed_version(&props, cfg.decrypt)?;
     // Without logd the phone's own programs still run, and only what they
     // log is lost, so why it did not start goes to the kernel log.
     if let Some(logd) = &cfg.logd {
@@ -750,17 +830,25 @@ fn mount_firmware(partition: &str) -> Result<()> {
 #[cfg(target_os = "android")]
 const BUILD_VERSION: [&str; 3] = ["ro.build.version.release", "ro.build.version.security_patch", "ro.vendor.build.security_patch"];
 
-/// Set each of [`BUILD_VERSION`] to the installed system's value. An earlier
-/// run of the recovery service may have set it already, and init sets such
-/// a property only once.
+/// Use the installed system's version context, with an explicitly
+/// configured recovery-only system patch floor, before HALs start. An
+/// earlier recovery run may have set it already; init sets each only once.
 #[cfg(target_os = "android")]
-fn adopt_installed_version(props: &std::collections::HashMap<String, String>) -> Result<()> {
+fn adopt_installed_version(props: &std::collections::HashMap<String, String>, policy: skyward_config::Decrypt) -> Result<()> {
     for name in BUILD_VERSION {
-        let value = props.get(name).with_context(|| format!("the installed system says no {name}"))?;
-        if skyward_sys::prop(name).as_ref() != Some(value) {
-            skyward_sys::set_prop(name, value)?;
+        let installed = props.get(name).with_context(|| format!("the installed system says no {name}"))?;
+        let value = match name {
+            "ro.build.version.security_patch" => skyward_config::select_system_patchlevel(installed, policy.system_patchlevel_floor)?,
+            _ => installed.clone(),
+        };
+        if skyward_sys::prop(name).as_ref() != Some(&value) {
+            skyward_sys::set_prop(name, &value)?;
         }
-        skyward_sys::kmsg(&format!("{name} is the installed system's {value}"))?;
+        if value != *installed {
+            skyward_sys::kmsg(&format!("{name} is {value} only for recovery decryption; the installed system still reports {installed}"))?;
+        } else {
+            skyward_sys::kmsg(&format!("{name} is the installed system's {value}"))?;
+        }
     }
     Ok(())
 }

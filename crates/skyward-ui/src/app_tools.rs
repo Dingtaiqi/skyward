@@ -36,7 +36,7 @@ impl App {
         self.refresh();
     }
 
-    fn recovery_action(&mut self, action: Action) -> Vec<Effect> {
+    pub(super) fn recovery_action(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::RootPick(index) => {
                 self.state.root_pick = index;
@@ -103,7 +103,7 @@ impl App {
         Vec::new()
     }
 
-    fn recovery_confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
+    pub(super) fn recovery_confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let effect = match which {
             Confirm::RootModule => {
                 let Some(Ok(catalog)) = &self.state.root_modules else {

@@ -135,9 +135,11 @@ pub fn module(cx: &Ctx) -> Frame {
         .as_ref()
         .and_then(|r| r.as_ref().ok())
         .and_then(|catalog| s.root_pick.and_then(|k| catalog.modules.get(k)));
-    let title = module
-        .map(|m| m.name.as_str())
-        .unwrap_or_else(|| l.pick(["禁用所有模块", "停用所有模組", "Disable all modules"]));
+    let title = if module.is_some() {
+        l.pick(["模块设置", "模組設定", "Module settings"])
+    } else {
+        l.pick(["禁用所有模块", "停用所有模組", "Disable all modules"])
+    };
     if let Some(m) = module {
         y = widgets::paragraph(
             &mut c,

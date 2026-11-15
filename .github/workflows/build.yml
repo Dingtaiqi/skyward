@@ -19,6 +19,10 @@ on:
         type: boolean
         required: false
         default: false
+      system_patchlevel_floor:
+        description: Optional recovery-only KeyMint system patch-date floor (YYYY-MM-DD); requires one device
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -31,6 +35,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  shell:
+    name: Build static Bash and test its installer interface
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the native musl compiler
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y musl-tools
+      - name: Build Bash from verified GNU source
+        run: bash .github/scripts/build-bash.sh "$GITHUB_WORKSPACE/bash-out"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bash-runtime
+          path: |
+            bash-out/bash
+            bash-out/COPYING
+            bash-out/musl-COPYRIGHT
+            bash-out/SOURCE
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          path: bash-out/bash-source.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
+
   check:
     name: Lint and test
     runs-on: ubuntu-24.04
@@ -102,7 +132,12 @@ jobs:
       - id: list
         env:
           DEVICE: ${{ inputs.device }}
+          PATCH_FLOOR: ${{ inputs.system_patchlevel_floor }}
         run: |
+          if [ -n "$PATCH_FLOOR" ] && { [ -z "$DEVICE" ] || [ "$GITHUB_REF_TYPE" = tag ]; }; then
+            echo 'A decryption compatibility floor requires one device and a branch build' >&2
+            exit 1
+          fi
           if [ -n "$DEVICE" ]; then
             test -f "devices/$DEVICE.toml"
             echo "devices=$(jq -nc --arg device "$DEVICE" '[$device]')" >> "$GITHUB_OUTPUT"
@@ -114,7 +149,7 @@ jobs:
 
   recovery:
     name: Recovery for ${{ matrix.device }}
-    needs: [tools, devices]
+    needs: [tools, shell, devices]
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -126,6 +161,10 @@ jobs:
         with:
           name: tools
           path: tools
+      - uses: actions/download-artifact@v8
+        with:
+          name: bash-runtime
+          path: bash-runtime
       - name: Make the tools runnable
         run: chmod +x tools/skyward tools/skyward-pack
       - name: Read the stock build the recovery is made on
@@ -180,19 +219,20 @@ jobs:
           DEVICE: ${{ matrix.device }}
           STOCK: ${{ steps.stock.outputs.version }}
           MYRON_DIAGNOSTICS: ${{ inputs.myron_diagnostics }}
+          PATCH_FLOOR: ${{ inputs.system_patchlevel_floor }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="${GITHUB_SHA::7}"; fi
           name="skyward-$version-$DEVICE-$STOCK"
           extra=()
-          if [ "$DEVICE" = myron ]; then
-            extra+=(--library "$RUNNER_TEMP/myron-native/ese_weaver.so")
-          fi
-          if [ "$DEVICE" = myron ] && [ "$MYRON_DIAGNOSTICS" = true ]; then
-            name="$name-diagnostic"
-            extra+=(--myron-diagnostics)
+          if [ "$DEVICE" = myron ]; then extra+=(--library "$RUNNER_TEMP/myron-native/ese_weaver.so"); fi
+          if [ "$DEVICE" = myron ] && [ "$MYRON_DIAGNOSTICS" = true ]; then name="$name-diagnostic"; extra+=(--myron-diagnostics); fi
+          if [ -n "$PATCH_FLOOR" ]; then
+            extra+=(--system-patchlevel-floor "$PATCH_FLOOR")
+            name="$name-decrypt${PATCH_FLOOR//-/}"
           fi
           mkdir out
           tools/skyward-pack recovery --stock stock/recovery.img --binary tools/skyward --system-init tools/system-init \
+            --bash-dir bash-runtime \
             --config "devices/$DEVICE.toml" --font resources/fonts/MiSansVF.ttf --mono resources/fonts/KirkMono-Regular.ttf \
             --mono-license resources/fonts/KirkMono-OFL.txt "${extra[@]}" --out "out/$name.img"
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -241,6 +281,11 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$version"
           python3 -m pip install cryptography==50.0.2
           python3 ci/update_catalog.py --images images --tag "$GITHUB_REF_NAME" --out images/updates.json
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bash-source.tar.gz
+          path: sources
+          skip-decompress: true
       # Each zip shows on the release as the phone it is for, its model and
       # then its codename, which is how people look for theirs; a device
       # whose zip is missing stops the release.
@@ -258,4 +303,4 @@ jobs:
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
             zips+=("$zip#$model ($device)")
           done
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS images/updates.json
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS images/updates.json sources/bash-source.tar.gz
