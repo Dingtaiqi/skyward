@@ -235,6 +235,11 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="${GITHUB_SHA::7}"; fi
           name="skyward-$version-$DEVICE-$STOCK"
           extra=()
+          # Published K60 builds use this fork's tested Android 17 key
+          # context. Keep ordinary branch builds on the stock profile.
+          if [ "$GITHUB_REPOSITORY" = Dingtaiqi/skyward ] && [ "$GITHUB_REF_TYPE" = tag ] && [ "$DEVICE" = socrates ]; then
+            PATCH_FLOOR=2026-09-01
+          fi
           if [ "$DEVICE" = myron ]; then extra+=(--library "$RUNNER_TEMP/myron-native/ese_weaver.so"); fi
           if [ "$DEVICE" = myron ] && [ "$MYRON_DIAGNOSTICS" = true ]; then name="$name-diagnostic"; extra+=(--myron-diagnostics); fi
           if [ -n "$PATCH_FLOOR" ]; then
@@ -314,4 +319,6 @@ jobs:
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
             zips+=("$zip#$model ($device)")
           done
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS images/updates.json sources/bash-source.tar.gz
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest \
+            --title "$GITHUB_REF_NAME · K60 Pro / K90 Pro Max" --notes-file ci/release-notes.zh-CN.md \
+            "${zips[@]}" images/SHA256SUMS images/updates.json sources/bash-source.tar.gz
