@@ -3,6 +3,17 @@
 
 use anyhow::{ensure, Result};
 
+/// Use only kernel boot parameters, not mutable Android properties. Some
+/// Xiaomi bootloaders omit vbmeta.device_state but report orange instead:
+/// https://source.android.com/docs/security/features/verifiedboot/boot-flow
+/// Missing, unknown or conflicting evidence must not authorize a write.
+pub fn bootloader_unlocked(device_state: Option<&str>, verified_state: Option<&str>) -> bool {
+    matches!(
+        (device_state, verified_state),
+        (Some("unlocked"), None | Some("orange")) | (None, Some("orange"))
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags(pub u32);
 
@@ -38,6 +49,23 @@ pub fn disabled(image: &[u8], expected: Flags, checks: [bool; 2]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_boot_state_allows_orange_without_a_device_state() {
+        assert!(bootloader_unlocked(None, Some("orange")));
+        assert!(bootloader_unlocked(Some("unlocked"), Some("orange")));
+        assert!(bootloader_unlocked(Some("unlocked"), None));
+        for device in [None, Some("locked"), Some("unknown")] {
+            for verified in [None, Some("green"), Some("yellow"), Some("red"), Some("unknown")] {
+                assert!(!bootloader_unlocked(device, verified));
+            }
+        }
+        assert!(!bootloader_unlocked(Some("locked"), Some("orange")));
+        assert!(!bootloader_unlocked(Some("unknown"), Some("orange")));
+        assert!(!bootloader_unlocked(Some("unlocked"), Some("green")));
+        assert!(!bootloader_unlocked(Some("unlocked"), Some("yellow")));
+        assert!(!bootloader_unlocked(Some("unlocked"), Some("unknown")));
+    }
 
     fn image() -> Vec<u8> {
         let mut image = vec![0xa5; 4096];

@@ -93,10 +93,12 @@ pub fn avb_status() -> Result<AvbStatus> {
     File::open(&path)
         .with_context(|| format!("open {}", path.display()))?
         .read_exact(&mut header)?;
+    let device_state = skyward_block::boot_param("androidboot.vbmeta.device_state")?;
+    let verified_state = skyward_block::boot_param("androidboot.verifiedbootstate")?;
     Ok(AvbStatus {
         slot,
         flags: Flags::of(&header)?.0,
-        unlocked: skyward_block::boot_param("androidboot.vbmeta.device_state")?.as_deref() == Some("unlocked"),
+        unlocked: avb::bootloader_unlocked(device_state.as_deref(), verified_state.as_deref()),
         snapshot: skyward_vab::snapshot_state()?,
     })
 }
