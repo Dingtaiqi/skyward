@@ -9515,7 +9515,8 @@ mod tests {
     #[test]
     fn individual_backup_selection_does_not_expand_to_the_whole_boot_group() {
         let (f, i) = (fonts(), info());
-        let mut app = opened(Screen::BackupPartitions, &f, &i);
+        let mut app = opened(Screen::Backup, &f, &i);
+        tap(&mut app, &f, &i, Action::Open(Screen::BackupPartitions));
         app.data_waiting(None);
         app.set_backup_partitions(Ok(["boot", "init_boot", "vendor_boot"].map(|name| BackupPartition { name: name.into(), part: skyward_backup::Part::Boot, bytes: Some(4096) }).to_vec()));
         app.act(Action::BackupItemsAll(false), 0);
@@ -9532,7 +9533,8 @@ mod tests {
     #[test]
     fn avb_confirmation_requires_an_unlocked_idle_slot_and_available_backup_storage() {
         let (f, i) = (fonts(), info());
-        let mut app = opened(Screen::Avb, &f, &i);
+        let mut app = opened(Screen::Advanced, &f, &i);
+        tap(&mut app, &f, &i, Action::Open(Screen::Avb));
         let status = AvbStatus { slot: Slot::A, flags: 0, unlocked: false, snapshot: SnapshotState::None };
         app.set_avb(Ok(status.clone()));
         app.data_waiting(None);
@@ -9551,7 +9553,8 @@ mod tests {
     #[test]
     fn root_module_actions_name_one_module_and_do_not_run_a_module_script() {
         let (f, i) = (fonts(), info());
-        let mut app = opened(Screen::RootModules, &f, &i);
+        let mut app = opened(Screen::Advanced, &f, &i);
+        tap(&mut app, &f, &i, Action::Open(Screen::RootModules));
         app.set_root_modules(Ok(RootCatalog { kernelsu: true, modules: vec![skyward_modules::root::Module {
             id: "example".into(), name: "Example".into(), version: "1".into(), author: "Test".into(), description: String::new(),
             disabled: false, remove: false, staged: false, problem: None,

@@ -178,6 +178,8 @@ fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
         );
     }
     let before = cache_stamp();
+    let mut cached = !before.is_empty();
+    for id in &ids { cached |= root::preinit_present(Path::new("/metadata"), id)?; }
     let ksud = ["/data/adb/ksud", "/data/adb/ksu/bin/ksud"]
         .into_iter()
         .find_map(|p| fs::canonicalize(p).ok().filter(|p| p.starts_with(ADB) && p.is_file()));
@@ -187,7 +189,7 @@ fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
             "mount metadata before managing KernelSU modules"
         );
         ensure!(
-            before.is_empty() || ksud.is_some(),
+            !cached || ksud.is_some(),
             "KernelSU preinit cache exists but its matching ksud is missing"
         );
     }
@@ -207,7 +209,7 @@ fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
                 Ok(())
             };
             restored.context("restore metadata mount mode after refreshing KernelSU")?;
-            let required = !before.is_empty()
+            let required = cached
                 || ids.iter().any(|id| {
                     ["initrc", "preinit"].iter().any(|name| {
                         ["modules", "modules_update"]
@@ -221,6 +223,11 @@ fn modules(id: Option<&str>, operation: Operation) -> Result<String> {
                     cache_stamp() != before,
                     "module markers saved, but no refreshed KernelSU preinit cache was verified"
                 );
+                if matches!(operation, Operation::Disable | Operation::Remove) {
+                    for id in &ids {
+                        ensure!(!root::preinit_present(Path::new("/metadata"), id)?, "module markers saved, but cached preinit programs of {id} remain enabled");
+                    }
+                }
             }
         }
     }

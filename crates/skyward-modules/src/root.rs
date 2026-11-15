@@ -230,6 +230,20 @@ pub fn change(adb: &Path, id: &str, operation: Operation) -> Result<()> {
     Ok(())
 }
 
+/// KernelSU may have copied preinit programs out of data before the next
+/// boot. A disabled module must not retain any such runnable directory.
+pub fn preinit_present(metadata: &Path, id: &str) -> Result<bool> {
+    ensure!(valid_id(id), "invalid module id");
+    for base in ["vold/ksu/preinit", "watchdog/ksu/preinit", "ksu/preinit"] {
+        match std::fs::symlink_metadata(metadata.join(base).join(id)) {
+            Ok(_) => return Ok(true),
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("inspect KernelSU cached preinit programs"),
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +331,14 @@ mod tests {
         fs::remove_file(tmp.path().join("modules/example/module.prop")).unwrap();
         symlink("/dev/null", tmp.path().join("modules/example/module.prop")).unwrap();
         assert!(change(tmp.path(), "example", Operation::Remove).is_err());
+    }
+
+    #[test]
+    fn a_cached_preinit_copy_is_not_mistaken_for_a_disabled_module() {
+        let metadata = tempfile::tempdir().unwrap();
+        assert!(!preinit_present(metadata.path(), "example").unwrap());
+        fs::create_dir_all(metadata.path().join("vold/ksu/preinit/example")).unwrap();
+        assert!(preinit_present(metadata.path(), "example").unwrap());
+        assert!(preinit_present(metadata.path(), "../other").is_err());
     }
 }

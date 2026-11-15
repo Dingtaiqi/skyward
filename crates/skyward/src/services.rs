@@ -292,6 +292,24 @@ fn private_memory_data(uid: libc::uid_t, gid: libc::gid_t) -> io::Result<()> {
 /// are written over. Return mount points whose devices must stay mapped,
 /// including mounts retained in a service's private namespace even when
 /// no file on them is open. Locked mappings stay for the recovery's life.
+pub fn private_mounts(services: &[Service], mounted: &[Mounted]) -> Result<Vec<PathBuf>> {
+    let ours = fs::read_link("/proc/self/ns/mnt").context("read the recovery's mount namespace")?;
+    let mut devices = BTreeSet::new();
+    for service in services.iter().filter(|s| !s.oneshot) {
+        let overrides = LibraryMounts::prepare(service.library_overrides.iter().map(|m| (&m.source, &m.target)))?;
+        let Some(pid) = running_instance(service, &overrides)? else { continue };
+        let process = Process::new(pid as i32)?;
+        devices.extend(kept_mounted(
+            fs::read_link(format!("/proc/{pid}/ns/mnt")), &ours,
+            || process.mountinfo().context("read the service's private mount table"),
+        )?);
+    }
+    let partitions = mounted.iter().map(|m| {
+        Ok((fs::metadata(&m.device)?.rdev(), m.mount_point.clone()))
+    }).collect::<Result<Vec<_>>>()?;
+    Ok(retained_mounts(&devices, &partitions))
+}
+
 pub fn pin(services: &[Service], mounted: &[Mounted]) -> Result<Vec<PathBuf>> {
     let mut files = BTreeSet::new();
     let mut devices = BTreeSet::new();
