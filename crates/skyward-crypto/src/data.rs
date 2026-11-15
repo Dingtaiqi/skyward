@@ -10,6 +10,8 @@ use crate::keystore::{StoredKey, Unwrap};
 use crate::token::Token;
 use crate::user::Bound;
 use crate::weaver::Weaver;
+use crate::data_users::{self, User, OWNER};
+pub use crate::data_users::Closed;
 use anyhow::{Context, Result};
 use skyward_binder::driver::Binder;
 use skyward_block::dm::Target;
@@ -28,9 +30,6 @@ pub const MAPPED: &str = "userdata";
 /// phone shows them to apps.
 pub const SHARED_STORAGE: &str = "/data/media";
 pub const SDCARD: &str = "/sdcard";
-
-/// The phone's owner, the first of its users.
-const OWNER: u32 = 0;
 
 /// The key is in a directory of this name under the one the phone names.
 const KEY_DIR: &str = "key";
@@ -190,18 +189,6 @@ pub fn close() -> Result<()> {
     Ok(())
 }
 
-/// A user whose own files are still closed: who, the kind of screen lock
-/// they set in the phone's numbering, and whether the phone made their
-/// credential up, in which case they open behind the owner and nobody is
-/// asked for it. `why` says why such a user did not open behind the owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Closed {
-    pub user: u32,
-    pub lock: i32,
-    pub made_up: bool,
-    pub why: Option<String>,
-}
-
 /// The data partition as far as it opens with nothing a user knows.
 pub struct Opening {
     /// How it was mounted, where this mounted it rather than an earlier
@@ -239,20 +226,17 @@ pub fn open_with_options(service: &KeyMint, options: Options) -> Result<Opening>
         false => Some(open(service, options)?),
     };
     open_shared(service)?;
-    let mut closed = Vec::new();
-    let mut owner = Note::default();
-    for user in open_users(service)? {
+    let mode = std::fs::read_to_string(FILE_MODE).with_context(|| format!("read {FILE_MODE}"))?;
+    let wrapped = crate::fscrypt::hardware_wrapped(mode.trim());
+    let (closed, owner) = data_users::open(users()?, |user| {
+        open_user_de(service, user, wrapped)
+    }, |user| {
         let protector = protector(user)?;
         match protector.lock {
-            None => {
-                let note = open_user_files(service, user, None, None)?;
-                if user == OWNER {
-                    owner = note;
-                }
-            }
-            Some(lock) => closed.push(Closed { user, lock: lock.kind, made_up: made_up(user, &protector.id), why: None }),
+            None => open_user_files(service, user, None, None).map(User::Open),
+            Some(lock) => Ok(User::Locked { lock: lock.kind, made_up: made_up(user, &protector.id) }),
         }
-    }
+    })?;
     Ok(Opening { mounted, closed: open_made_up(service, closed, &owner) })
 }
 
@@ -260,6 +244,7 @@ pub fn open_with_options(service: &KeyMint, options: Options) -> Result<Opening>
 /// and, where `user` is the owner, of each of `closed` whose credential
 /// the phone made up behind theirs; give those still closed.
 pub fn unlock(service: &KeyMint, closed: &[Closed], user: u32, credential: &[u8]) -> Result<Vec<Closed>> {
+    anyhow::ensure!(closed.iter().any(|c| c.user == user && c.lock.is_some() && !c.made_up), "user {user} has no readable screen-lock metadata");
     let note = open_user_files(service, user, Some(credential), None)?;
     let rest = closed.iter().filter(|c| c.user != user).cloned().collect();
     Ok(match user == OWNER {
@@ -336,18 +321,12 @@ fn users() -> Result<Vec<u32>> {
     Ok(users)
 }
 
-/// Let in the keys for the files of each user that are readable before
-/// that user signs in, and give the users they belong to.
-fn open_users(service: &KeyMint) -> Result<Vec<u32>> {
-    let mode = std::fs::read_to_string(FILE_MODE).with_context(|| format!("read {FILE_MODE}"))?;
-    let wrapped = crate::fscrypt::hardware_wrapped(mode.trim());
-    let users = users()?;
-    for user in &users {
-        let dir = Path::new(USER_KEYS).join("de").join(user.to_string());
-        let raw = hardware_key(service, &dir, wrapped)?;
-        crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped)?;
-    }
-    Ok(users)
+/// Let in one user's DE key before reading that user's protector.
+fn open_user_de(service: &KeyMint, user: u32, wrapped: bool) -> Result<()> {
+    let dir = Path::new(USER_KEYS).join("de").join(user.to_string());
+    let raw = hardware_key(service, &dir, wrapped)?;
+    crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped)?;
+    Ok(())
 }
 
 /// Where a phone keeps what it needs to recover a user's own secret.

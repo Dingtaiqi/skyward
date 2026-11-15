@@ -703,6 +703,7 @@ pub fn decrypt(cx: &Ctx) -> Frame {
             Some(l.pick(["你可以在「文件管理」中查看本机文件", "你可以在「檔案管理」中查看本機檔案", "You can see the phone's files in File manager"])),
             None,
         ),
+        Data::Partial(why) => data_status(cx, c, Icon::Lock, l.pick(["主用户已解密，部分用户仍锁定", "主要使用者已解密，部分使用者仍鎖定", "Owner unlocked; some users remain locked"]), None, Some(why)),
         Data::Failed(why) => data_status(cx, c, Icon::Lock, l.pick(["未能打开 data 分区", "無法開啟 data 分割區", "Couldn't open the data partition"]), None, Some(why)),
         Data::Erased => data_status(
             cx,
@@ -735,7 +736,7 @@ fn data_status(cx: &Ctx, mut c: Canvas, icon: Icon, title: &str, note: Option<&s
         out.push(Hit { rect: again, action: Action::OpenData });
     }
     let leave_cy = m.h as f32 - m.dp(64.0);
-    let leave = l.pick(if matches!(cx.state.data, Data::Open | Data::Erased) { ["完成", "完成", "Done"] } else { NOT_NOW });
+    let leave = l.pick(if matches!(cx.state.data, Data::Open | Data::Partial(_) | Data::Erased) { ["完成", "完成", "Done"] } else { NOT_NOW });
     c.text_center(&f.heading, leave, x, leave_cy, m.row_title_px, t.pal.accent);
     out.push(Hit { rect: Rect::new(x - m.dp(80.0), leave_cy - m.dp(24.0), m.dp(160.0), m.dp(48.0)), action: Action::Skip });
     Frame { header: false, ..Frame::new(t, c, out, l.pick(DECRYPT), 0.0) }
@@ -2241,7 +2242,7 @@ pub fn relabel(cx: &Ctx) -> Frame {
         ]);
         let mut y = widgets::paragraph(&mut c, t, f, top, what);
         let note = match s.data {
-            Data::Open | Data::Locked { .. } => None,
+            Data::Open | Data::Locked { .. } | Data::Partial(_) => None,
             Data::Erased => Some(["data 分区已清除。", "data 分割區已清除。", "The data partition was wiped."]),
             Data::Closed | Data::Opening | Data::Failed(_) => {
                 Some(["暂无法修复，需先在「解密」中打开 data 分区。", "暫時無法修復，需先在「解密」中開啟 data 分割區。", "Open the data partition in Decrypt first."])
@@ -3768,7 +3769,7 @@ pub fn systems(cx: &Ctx) -> Frame {
         y = widgets::section(&mut c, t, f, y, second_role);
         let size = fmt::bytes(other.size);
         let facts = widgets::list(&mut c, t, f, y, &[Row::new(l.pick(["占用空间", "佔用空間", "Space used"])).trail(Trail::Text(&size))]);
-        let mounted = matches!(s.data, Data::Open | Data::Locked { .. });
+        let mounted = matches!(s.data, Data::Open | Data::Locked { .. } | Data::Partial(_));
         let remove = Row::new(l.pick(["删除第二系统", "刪除第二系統", "Remove the second system"])).tint(t.pal.danger);
         let (remove, act) = match mounted {
             true => (remove.trail(Trail::None), Action::AskDelete),

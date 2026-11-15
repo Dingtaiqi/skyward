@@ -822,6 +822,9 @@ pub enum Data {
     Locked { user: u32, keys: Keys, checking: bool },
     /// Open, every user's own files with it.
     Open,
+    /// Owner storage is open; some secondary users remain unavailable.
+    /// A complete decrypted data backup is not possible in this state.
+    Partial(String),
     /// Not opened, and why.
     Failed(String),
     /// Erased whole: nothing opens until the system makes it afresh, as it
@@ -834,7 +837,7 @@ impl Data {
     /// open, and so are the owner's own files, which open first.
     pub fn storage_open(&self) -> bool {
         match self {
-            Data::Open => true,
+            Data::Open | Data::Partial(_) => true,
             // The owner is user 0.
             Data::Locked { user, .. } => *user != 0,
             _ => false,
@@ -3294,6 +3297,13 @@ impl App {
         self.refresh();
     }
 
+    /// Owner storage is available; the remaining users could not be opened.
+    pub fn data_partial(&mut self, why: String) {
+        self.state.data = Data::Partial(why);
+        self.state.code.clear();
+        self.refresh();
+    }
+
     /// What the user entered did not open their own files: the page asks
     /// again and says why.
     pub fn unlock_failed(&mut self, why: String, now: u64) {
@@ -3618,7 +3628,7 @@ impl App {
             data: match self.state.data {
                 Data::Erased => None,
                 Data::Open => Some(true),
-                Data::Closed | Data::Opening | Data::Failed(_) | Data::Locked { .. } => Some(false),
+                Data::Closed | Data::Opening | Data::Failed(_) | Data::Locked { .. } | Data::Partial(_) => Some(false),
             },
             slot: info.slot.map(Slot::letter),
             temp: battery.and_then(|b| b.temp),
@@ -6520,7 +6530,7 @@ impl App {
             // The partition has to be open; whether its users have unlocked
             // their own files makes no difference.
             Confirm::Relabel => match self.state.data {
-                Data::Open | Data::Locked { .. } => fx.push(Effect::Relabel),
+                Data::Open | Data::Locked { .. } | Data::Partial(_) => fx.push(Effect::Relabel),
                 Data::Opening => self.say(l.pick(DATA_OPENING), now),
                 Data::Erased => self.say(l.pick(DATA_ERASED), now),
                 Data::Closed | Data::Failed(_) => {
@@ -9423,6 +9433,21 @@ mod tests {
             tap(&mut app, &f, &i, Action::BackupPart(k));
         }
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "nothing ticked, nothing backed up");
+    }
+
+    #[test]
+    fn unavailable_profiles_allow_owner_storage_but_block_a_complete_data_backup() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Backup, &f, &i);
+        app.data_partial("user 10: missing spblob".into());
+        assert!(app.state.data.storage_open());
+        assert_eq!(app.state.data, Data::Partial("user 10: missing spblob".into()));
+        tap(&mut app, &f, &i, Action::BackupPart(2));
+        assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "encrypted user files must not be presented as a complete decrypted data backup");
+        tap(&mut app, &f, &i, Action::BackupPart(2));
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![Effect::Backup {
+            parts: [true, true, false, true], place: Place::Storage, compress: false, verify: true,
+        }], "the owner's storage can still hold backups of other partitions");
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.

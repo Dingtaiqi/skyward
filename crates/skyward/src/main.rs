@@ -432,7 +432,7 @@ fn main() -> Result<()> {
                     None => println!("{} is mounted already", data::MOUNT),
                 }
                 let mut closed = opening.closed;
-                let asked = closed.iter().find(|c| !c.made_up).map(|c| c.user);
+                let asked = closed.iter().find(|c| !c.made_up && c.lock.is_some()).map(|c| c.user);
                 if let (Some(credential), Some(user)) = (&credential, asked) {
                     closed = data::unlock(service, &closed, user, credential.as_bytes())?;
                 }

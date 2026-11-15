@@ -1,11 +1,19 @@
-//! Skyward's own releases on GitHub: which is the newest, and the zip in
-//! it for one phone, as the release workflow names each phone's.
+//! This fork's signed releases on GitHub, reached through public mirrors.
+//! A mirror supplies bytes; only the pinned signing key supplies trust.
 
 use anyhow::{bail, ensure, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
+use std::io::Read;
+use std::time::Duration;
 
-/// Where GitHub answers which release of Skyward is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/kirklin/skyward/releases/latest";
+/// The primary mirror of this fork's signed update catalog.
+pub const LATEST: &str = "https://gh-proxy.org/https://github.com/Dingtaiqi/skyward/releases/latest/download/updates.json";
+const DIRECT: &str = "https://github.com/Dingtaiqi/skyward/releases/latest/download/updates.json";
+const MIRRORS: [&str; 2] = ["https://gh-proxy.org/", "https://ghfast.top/"];
+const REPOSITORY: &str = "Dingtaiqi/skyward";
+const PUBLIC_KEY: &str = include_str!("../../../resources/update-key.pub");
+const MAX_CATALOG: u64 = 1024 * 1024;
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
@@ -38,11 +46,10 @@ pub struct Build {
 }
 
 impl Build {
-    /// Where to download the zip from, in the order to try: the file's own
-    /// short-lived address, where GitHub's API gave one, then the release's
-    /// link on github.com, which some networks do not reach.
+    /// Mirrors first, then an optional resolved address and GitHub itself.
     pub fn sources(&self, located: Option<String>) -> Vec<String> {
-        located.into_iter().chain([self.link.clone()]).collect()
+        MIRRORS.iter().map(|prefix| format!("{prefix}{}", self.link))
+            .chain(located).chain([self.link.clone()]).collect()
     }
 }
 
@@ -69,11 +76,49 @@ struct Message {
     message: String,
 }
 
+/// Only this envelope is read through public mirrors. The exact payload
+/// bytes are authenticated before any version, URL or checksum is trusted.
+#[derive(Deserialize)]
+struct Signed {
+    payload: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct Catalog {
+    schema: u32,
+    repository: String,
+    tag_name: String,
+    assets: Vec<Asset>,
+}
+
+fn signed_newest(answer: &str, key: &[u8], codename: &str, running: &str) -> Result<Newest> {
+    let signed: Signed = serde_json::from_str(answer).context("read the signed update catalog")?;
+    let payload = STANDARD.decode(&signed.payload).context("decode the update catalog")?;
+    let signature = STANDARD.decode(&signed.signature).context("decode the catalog signature")?;
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
+        .verify(&payload, &signature).map_err(|_| anyhow::anyhow!("the update catalog signature is not trusted"))?;
+    let catalog: Catalog = serde_json::from_slice(&payload).context("read the authenticated update catalog")?;
+    ensure!(catalog.schema == 1 && catalog.repository == REPOSITORY, "the update catalog is for another channel");
+    let release = Release { tag_name: catalog.tag_name, assets: catalog.assets };
+    let prefix = format!("https://github.com/{REPOSITORY}/releases/download/{}/", release.tag_name);
+    for asset in &release.assets {
+        ensure!(!asset.name.contains(['/', '\\']) && !asset.name.is_empty(), "invalid update filename");
+        ensure!(asset.browser_download_url == format!("{prefix}{}", asset.name), "the update is outside this release channel");
+        ensure!(asset.size > 0, "the update is empty");
+    }
+    from_release(release, codename, running)
+}
+
 /// The newest release that `answer`, GitHub's answer at [`LATEST`], tells
 /// of, and its zip for the phone `codename` names, as the build of version
 /// `running` sees it.
 pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
     let release: Release = serde_json::from_str(answer).context("read GitHub's answer")?;
+    from_release(release, codename, running)
+}
+
+fn from_release(release: Release, codename: &str, running: &str) -> Result<Newest> {
     let tag = release.tag_name;
     let version = tag.strip_prefix('v').with_context(|| format!("the newest release is tagged {tag}, which is not v and a version"))?;
     let newest = semver::Version::parse(version).with_context(|| format!("the newest release is tagged {tag}"))?;
@@ -81,7 +126,10 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
     // Each zip is named skyward-, the tag, the phone's codename, and the
     // stock build the image is made on.
     let start = format!("skyward-{tag}-{codename}-");
-    let build = match release.assets.into_iter().find(|a| a.name.starts_with(&start) && a.name.ends_with(".zip")) {
+    let mut candidates = release.assets.into_iter().filter(|a| a.name.starts_with(&start) && a.name.ends_with(".zip"));
+    let candidate = candidates.next();
+    ensure!(candidates.next().is_none(), "the release has multiple builds for {codename}; no automatic selection is safe");
+    let build = match candidate {
         None => None,
         Some(a) => {
             let sha256 = a.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")).with_context(|| format!("GitHub gives no SHA-256 of {}", a.name))?;
@@ -95,19 +143,29 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
 /// Ask GitHub for Skyward's newest release, and its zip for the phone
 /// `codename` names, as the build of version `running`.
 pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
-    let mut response = agent
-        .get(LATEST)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", API_VERSION)
-        .header("User-Agent", format!("Skyward/{running}"))
-        .call()
-        .with_context(|| format!("ask {LATEST}"))?;
-    let status = response.status();
-    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {LATEST}"))?;
-    if !status.is_success() {
-        bail!(refusal(status, &body));
+    let key = STANDARD.decode(PUBLIC_KEY.trim()).context("read this build's update public key")?;
+    let urls = [LATEST.to_string(), format!("{}{DIRECT}", MIRRORS[1]), DIRECT.to_string()];
+    ask_urls(agent, &urls, &key, codename, running)
+}
+
+fn ask_urls(agent: &ureq::Agent, urls: &[String], key: &[u8], codename: &str, running: &str) -> Result<Newest> {
+    let mut errors = Vec::new();
+    for url in urls {
+        let answer = (|| -> Result<Newest> {
+            let mut response = agent.get(url).header("User-Agent", format!("Skyward/{running}"))
+                .config().timeout_global(Some(Duration::from_secs(15))).build().call()?;
+            ensure!(response.status().is_success(), "server answered {}", response.status());
+            let mut body = String::new();
+            response.body_mut().as_reader().take(MAX_CATALOG + 1).read_to_string(&mut body)?;
+            ensure!(body.len() as u64 <= MAX_CATALOG, "the update catalog is too large");
+            signed_newest(&body, key, codename, running)
+        })();
+        match answer {
+            Ok(newest) => return Ok(newest),
+            Err(e) => errors.push(format!("{url}: {e:#}")),
+        }
     }
-    newest(&body, codename, running)
+    bail!("no trusted update catalog is reachable: {}", errors.join("; "))
 }
 
 /// Where the file a build's `url` hands out is now, as GitHub's API sends
@@ -173,8 +231,11 @@ mod tests {
     fn a_zip_is_downloaded_from_where_github_sends_it_then_from_its_link() {
         let build = newest(ANSWERED_013, "ishtar", "0.1.2").unwrap().build.unwrap();
         let link = "https://github.com/kirklin/skyward/releases/download/v0.1.3/skyward-v0.1.3-ishtar-OS3.0.308.0.WMACNXM.zip";
-        assert_eq!(build.sources(Some("https://release-assets.githubusercontent.com/a?sig=1".into())), ["https://release-assets.githubusercontent.com/a?sig=1", link]);
-        assert_eq!(build.sources(None), [link], "where GitHub's API gave no address");
+        assert_eq!(build.sources(Some("https://release-assets.githubusercontent.com/a?sig=1".into())), [
+            format!("https://gh-proxy.org/{link}"), format!("https://ghfast.top/{link}"),
+            "https://release-assets.githubusercontent.com/a?sig=1".into(), link.into(),
+        ]);
+        assert_eq!(build.sources(None), [format!("https://gh-proxy.org/{link}"), format!("https://ghfast.top/{link}"), link.into()]);
     }
 
     /// A server on this computer that answers one request with `answer`,
@@ -237,5 +298,75 @@ mod tests {
         let untagged = ANSWERED_013.replace("\"tag_name\":\"v0.1.3\"", "\"tag_name\":\"nightly\"");
         assert!(newest(&untagged, "ishtar", "0.1.2").is_err());
         assert!(newest("{}", "ishtar", "0.1.2").is_err());
+    }
+
+    fn test_key() -> ring::signature::Ed25519KeyPair {
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(&[42; 32]).unwrap()
+    }
+
+    fn catalog_payload() -> serde_json::Value {
+        let mut payload: serde_json::Value = serde_json::from_str(&ANSWERED_013.replace("kirklin/skyward", REPOSITORY)).unwrap();
+        payload["schema"] = 1.into();
+        payload["repository"] = REPOSITORY.into();
+        payload
+    }
+
+    fn sign(payload: &serde_json::Value, key: &ring::signature::Ed25519KeyPair) -> String {
+        let payload = serde_json::to_vec(payload).unwrap();
+        serde_json::json!({"payload": STANDARD.encode(&payload), "signature": STANDARD.encode(key.sign(&payload).as_ref())}).to_string()
+    }
+
+    #[test]
+    fn only_the_pinned_publisher_can_supply_update_checksums() {
+        use ring::signature::KeyPair;
+        let key = test_key();
+        let signed = sign(&catalog_payload(), &key);
+        let newest = signed_newest(&signed, key.public_key().as_ref(), "ishtar", "0.1.2").unwrap();
+        assert!(newest.newer);
+        assert!(newest.build.unwrap().link.starts_with("https://github.com/Dingtaiqi/skyward/"));
+        let stranger = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[43; 32]).unwrap();
+        assert!(signed_newest(&signed, stranger.public_key().as_ref(), "ishtar", "0.1.2").is_err());
+        assert!(signed_newest(ANSWERED_013, key.public_key().as_ref(), "ishtar", "0.1.2").is_err(), "an unsigned API answer is not a fallback");
+    }
+
+    #[test]
+    fn changing_the_mirrored_payload_invalidates_its_signature() {
+        use ring::signature::KeyPair;
+        let key = test_key();
+        let mut signed: serde_json::Value = serde_json::from_str(&sign(&catalog_payload(), &key)).unwrap();
+        let changed = serde_json::to_vec(&serde_json::json!({"tag_name":"v99.0.0"})).unwrap();
+        signed["payload"] = STANDARD.encode(changed).into();
+        assert!(signed_newest(&signed.to_string(), key.public_key().as_ref(), "ishtar", "0.1.2").is_err());
+    }
+
+    #[test]
+    fn a_signed_catalog_still_needs_the_right_channel_and_unambiguous_device() {
+        use ring::signature::KeyPair;
+        let key = test_key();
+        let check = |payload| signed_newest(&sign(&payload, &key), key.public_key().as_ref(), "ishtar", "0.1.2");
+        let mut payload = catalog_payload();
+        payload["repository"] = "kirklin/skyward".into();
+        assert!(check(payload).is_err());
+        let mut payload = catalog_payload();
+        payload["assets"][1]["browser_download_url"] = "https://example.org/unrelated.zip".into();
+        assert!(check(payload).is_err());
+        let mut payload = catalog_payload();
+        let duplicate = payload["assets"][1].clone();
+        payload["assets"].as_array_mut().unwrap().push(duplicate);
+        assert!(check(payload).is_err());
+    }
+
+    #[test]
+    fn an_invalid_mirror_falls_back_without_trusting_its_metadata() {
+        use ring::signature::KeyPair;
+        let key = test_key();
+        let body = sign(&catalog_payload(), &key);
+        let (bad, bad_thread) = server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}".into());
+        let (good, good_thread) = server(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        let agent = crate::http::agent(Default::default());
+        let n = ask_urls(&agent, &[bad, good], key.public_key().as_ref(), "ishtar", "0.1.2").unwrap();
+        assert!(n.newer);
+        bad_thread.join().unwrap();
+        good_thread.join().unwrap();
     }
 }

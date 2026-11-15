@@ -41,6 +41,10 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked --workspace
+      - name: Test the signed update catalog publisher
+        run: |
+          python3 -m pip install cryptography==50.0.2
+          python3 -m unittest discover -s ci -p 'test_update_catalog.py' -v
       - name: Verify private library mounts in real child namespaces
         run: |
           binary=$(cargo test --locked -p skyward-sys --test library_mounts --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .target.name == "library_mounts" and .executable != null) | .executable')
@@ -226,6 +230,15 @@ jobs:
       - name: Sum the zips
         working-directory: images
         run: sha256sum -- *.zip > SHA256SUMS
+      - name: Sign this fork's update catalog
+        env:
+          SKYWARD_UPDATE_SIGNING_KEY: ${{ secrets.SKYWARD_UPDATE_SIGNING_KEY }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Dingtaiqi/skyward
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          test "$GITHUB_REF_NAME" = "v$version"
+          python3 -m pip install cryptography==50.0.2
+          python3 ci/update_catalog.py --images images --tag "$GITHUB_REF_NAME" --out images/updates.json
       # Each zip shows on the release as the phone it is for, its model and
       # then its codename, which is how people look for theirs; a device
       # whose zip is missing stops the release.
@@ -241,4 +254,4 @@ jobs:
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
             zips+=("$zip#$model ($device)")
           done
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS images/updates.json

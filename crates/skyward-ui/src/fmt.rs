@@ -478,6 +478,7 @@ pub fn data(l: Lang, d: &Data) -> &'static str {
         Data::Closed | Data::Opening | Data::Failed(_) => ["未挂载", "未掛載", "Not mounted"],
         Data::Locked { .. } => ["未解密", "未解密", "Locked"],
         Data::Open => ["已解密", "已解密", "Decrypted"],
+        Data::Partial(_) => ["部分用户未解密", "部分使用者未解密", "Partially decrypted"],
         Data::Erased => ["已清除", "已清除", "Wiped"],
     })
 }

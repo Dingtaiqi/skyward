@@ -842,15 +842,20 @@ fn show_closed(app: &mut App, closed: &[Closed]) -> Result<()> {
             skyward_sys::kmsg(&format!("the files of user {} stay closed: {why}", c.user))?;
         }
     }
-    let waiting = closed.iter().find(|c| !c.made_up).map(|c| {
-        let keys = match c.lock {
+    let waiting = closed.iter().filter(|c| !c.made_up).find_map(|c| {
+        let keys = match c.lock? {
             Lock::PATTERN => Keys::Pattern,
             Lock::PIN => Keys::Digits,
             _ => Keys::Letters,
         };
-        (c.user, keys)
+        Some((c.user, keys))
     });
-    app.data_waiting(waiting);
+    if waiting.is_none() && !closed.is_empty() {
+        let why = closed.iter().map(|c| format!("user {}: {}", c.user, c.why.as_deref().unwrap_or("files remain locked"))).collect::<Vec<_>>().join("\n");
+        app.data_partial(why);
+    } else {
+        app.data_waiting(waiting);
+    }
     Ok(())
 }
 

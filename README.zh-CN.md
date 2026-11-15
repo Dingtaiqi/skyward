@@ -36,6 +36,26 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 
 ![系统和 Skyward 都能在线更新](slides/zh-CN/out/05-updates.png)
 
+本分支由 [Dingtaiqi/skyward](https://github.com/Dingtaiqi/skyward) 独立维护。
+REC 自身更新使用本仓库 Release 中的 `updates.json`，依次尝试 `gh-proxy.org`、
+`ghfast.top` 和 GitHub 直连，不再检查原作者仓库。公共镜像的可用性会变化；更新清单
+必须通过内置 Ed25519 公钥验证，下载的 ZIP 还会校验清单中的 SHA-256，随后核对机型。
+系统 ROM 的官方更新接口保持原有配置。
+
+维护者发布前须在本仓库 Actions Secrets 中设置 `SKYWARD_UPDATE_SIGNING_KEY`，内容为
+本地保存的 32 字节 Ed25519 私钥种子的 Base64 文本，且必须对应
+`resources/update-key.pub`。私钥不进 Git，不发送给镜像站。修改 `Cargo.toml` 的版本后，
+使用匹配的 `v版本号` 标签触发构建；CI 在发布前生成并签名清单，缺少或使用错误密钥
+都会停止发布。`ci/update_catalog.py` 和对应测试记录了格式及校验规则。
+同一版本、同一机型只允许一个镜像，诊断版不进入自动更新；有额外兼容条件的构建
+须由维护者确认后才能作为该机型的更新。新更新渠道需要先手动安装含此修改的 REC；
+旧 REC 中的更新地址不会远程改变。未发布签名清单时，检查更新会明确失败。
+
+多用户解密也按用户分别处理：副用户缺少 `spblob`、DE 密钥或 CE 密钥失败，不再阻断
+主用户正常解密；该用户保留锁定状态及错误原因，不猜测凭据、不删除用户或密钥。
+主用户失败仍会明确报错。部分用户未解密时可访问已打开的主用户存储，但禁止完整
+data 备份，界面不会将此状态显示为全部解密。此修复尚需反馈设备实机复测。
+
 ### 备份和恢复
 
 ![系统、应用和 IMEI 都可以备份](slides/zh-CN/out/06-backup.png)
