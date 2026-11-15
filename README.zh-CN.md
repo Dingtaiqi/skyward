@@ -235,6 +235,15 @@ cargo ndk -t arm64-v8a --platform 30 clippy -p skyward -p skyward-install -p sky
 cargo run --release -p skyward-preview -- target/preview --lang en
 ```
 
+模块管理、AVB 和分区备份／恢复页面可以单独渲染，并通过 `--config` 使用指定设备的分辨率和密度：
+
+```sh
+cargo run --release -p skyward-preview -- target/preview/socrates --tools --config devices/socrates.toml
+cargo run --release -p skyward-preview -- target/preview/myron --tools --config devices/myron.toml
+```
+
+输出包含浅色、深色、长模块信息、空列表和 AVB 受限状态。普通图片展示屏幕首屏；超过一屏的页面另有 `-full.png` 长图。示例说明单独放在图片下方，不遮挡操作控件。构建工作流会将两台设备的预览分别保存在同一个 UI 附件中。这些图片使用合成数据，不表示已经通过实机测试。
+
 ## 许可证
 
 [GPL-3.0-or-later](LICENSE)

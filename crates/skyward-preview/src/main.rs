@@ -143,7 +143,11 @@ fn main() -> Result<()> {
         eprintln!("axis {tag}: {min}..{max} (default {def})");
     }
 
-    let cfg = DeviceConfig::load(root.join("devices/nezha.toml"))?;
+    let config = match args.iter().position(|a| a == "--config") {
+        Some(k) => root.join(args.get(k + 1).ok_or_else(|| anyhow!("--config needs a device configuration"))?),
+        None => root.join("devices/nezha.toml"),
+    };
+    let cfg = DeviceConfig::load(config)?;
     let (w, h) = (cfg.display.width, cfg.display.height);
     let ppd = cfg.display.density as f32 / 160.0;
     let light = Theme::light(w, h, ppd);

@@ -72,11 +72,14 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
       - name: Render recovery tools UI previews
-        run: cargo run --locked -p skyward-preview -- "$RUNNER_TEMP/recovery-tools-preview" --tools
+        run: |
+          for device in socrates myron; do
+            cargo run --locked -p skyward-preview -- "$RUNNER_TEMP/recovery-tools-preview/$device" --tools --config "devices/$device.toml"
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: recovery-tools-ui-${{ github.sha }}
-          path: ${{ runner.temp }}/recovery-tools-preview/*.png
+          path: ${{ runner.temp }}/recovery-tools-preview/**/*.png
           if-no-files-found: error
           retention-days: 7
       - name: Test the signed update catalog publisher

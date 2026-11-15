@@ -1838,8 +1838,11 @@ pub fn backup(cx: &Ctx) -> Frame {
         .collect();
     let parts = widgets::list(&mut c, t, f, y, &rows);
     out.extend(hits(&parts.rows, &[0, 1, 2, 3].map(Action::BackupPart)));
-    let selection = s.backup_include.as_ref().map(|names| names.join(", ")).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).to_owned());
-    let custom = widgets::list(&mut c, t, f, parts.bottom, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selection)]);
+    let selection = s.backup_include.as_ref().map(|names| {
+        let count = names.len();
+        tr!(l, "已选择 {count} 项", "已選擇 {count} 項", "{count} selected")
+    }).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).to_owned());
+    let custom = widgets::list(&mut c, t, f, parts.bottom + t.m.card_gap, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selection)]);
     out.extend(hits(&custom.rows, &[Action::Open(Screen::BackupPartitions)]));
     let y = widgets::section(&mut c, t, f, custom.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
     let storage = match (s.data.storage_open(), i.storage.free.map(fmt::gb)) {
@@ -1961,8 +1964,11 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                 out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit { rect, action: Action::RestorePart(k) }));
                 let mut bottom = list.bottom;
                 if !held.partitions.is_empty() {
-                    let selected = s.restore_include.as_ref().map(|names| names.join(", ")).unwrap_or_default();
-                    let custom = widgets::list(&mut c, t, f, bottom, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selected)]);
+                    let selected = s.restore_include.as_ref().map(|names| {
+                        let count = names.len();
+                        tr!(l, "已选择 {count} 项", "已選擇 {count} 項", "{count} selected")
+                    }).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).into());
+                    let custom = widgets::list(&mut c, t, f, bottom + t.m.card_gap, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selected)]);
                     out.extend(hits(&custom.rows, &[Action::Open(Screen::RestorePartitions)]));
                     bottom = custom.bottom;
                 }

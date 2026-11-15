@@ -9531,6 +9531,58 @@ mod tests {
     }
 
     #[test]
+    fn grouped_partition_controls_keep_indices_and_do_not_overlap_on_both_panels() {
+        let (f, mut i) = (fonts(), info());
+        i.slot = Some(Slot::A);
+        let partitions: Vec<_> = [
+            ("system", skyward_backup::Part::System),
+            ("boot", skyward_backup::Part::Boot),
+            ("persist", skyward_backup::Part::Efs),
+            ("init_boot", skyward_backup::Part::Boot),
+        ].into_iter().map(|(name, part)| BackupPartition { name: name.into(), part, bytes: Some(4096) }).collect();
+        for (w, h, ppd) in [(1440, 3200, 3.5), (1200, 2608, 3.0)] {
+            for lang in Lang::ALL {
+                for restore in [false, true] {
+                    let screen = if restore { Screen::RestorePartitions } else { Screen::BackupPartitions };
+                    let mut app = App::new(screen, w, h, ppd);
+                    app.state.lang = lang;
+                    app.set_backup_partitions(Ok(partitions.clone()));
+                    let mut entry = found(Place::Storage, 1_792_348_260, [true; 4]);
+                    entry.held.as_mut().unwrap().partitions = partitions.clone();
+                    app.state.restore = Some((entry, [false; 4]));
+                    app.state.restore_include = Some(Vec::new());
+                    app.act(Action::BackupItemsAll(false), 0);
+                    let theme = app.theme();
+                    let frame = app.whole_frame(&f, &i);
+                    let items: Vec<_> = frame.hits.iter().filter_map(|h| match h.action {
+                        Action::BackupItem(k) | Action::RestoreItem(k) => Some(k),
+                        _ => None,
+                    }).collect();
+                    assert_eq!(items, [1, 3, 0, 2], "grouping preserves the original partition indices");
+                    for (k, hit) in frame.hits.iter().enumerate() {
+                        let r = hit.rect;
+                        assert!(r.x >= theme.m.margin && r.x + r.w <= w as f32 - theme.m.margin + 0.01);
+                        assert!(r.h >= theme.m.dp(44.0));
+                        assert!(r.y + r.h <= frame.canvas.h as f32, "long pages retain their bottom controls");
+                        for other in &frame.hits[k + 1..] {
+                            let b = other.rect;
+                            assert!(r.x + r.w <= b.x || b.x + b.w <= r.x || r.y + r.h <= b.y || b.y + b.h <= r.y,
+                                "independent controls must not overlap: {r:?}, {b:?}");
+                        }
+                    }
+                    if restore {
+                        app.act(Action::RestoreItem(0), 0);
+                        assert_eq!(app.state.restore_include.as_deref(), Some(["system".to_owned()].as_slice()));
+                    } else {
+                        app.act(Action::BackupItem(0), 0);
+                        assert_eq!(app.state.backup_include.as_deref(), Some(["system".to_owned()].as_slice()));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn avb_confirmation_requires_an_unlocked_idle_slot_and_available_backup_storage() {
         let (f, i) = (fonts(), info());
         let mut app = opened(Screen::Advanced, &f, &i);
