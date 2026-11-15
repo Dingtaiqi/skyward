@@ -5,7 +5,8 @@ use skyward_backup::selection::Partition;
 use skyward_modules::root::{Catalog, Module};
 
 pub(super) fn render(out: &Path, fonts: &Fonts, cfg: &DeviceConfig) -> Result<()> {
-    let info = nezha(cfg);
+    let mut info = nezha(cfg);
+    info.slot = Some(Slot::A);
     let (w, h) = (cfg.display.width, cfg.display.height);
     let ppd = cfg.display.density as f32 / 160.0;
     let catalog = Catalog {
@@ -87,7 +88,8 @@ pub(super) fn render(out: &Path, fonts: &Fonts, cfg: &DeviceConfig) -> Result<()
                     bytes: Some(32 << 20),
                 },
             ]));
-            let mut canvas = whole_page(&mut app, fonts, &info);
+            let mut canvas = Canvas::new(w, h);
+            app.compose(&mut canvas, fonts, &info, CLOCK, 1000);
             canvas.text_center(
                 &fonts.body,
                 "界面示例 · 非实机测试结果",

@@ -200,7 +200,7 @@ pub fn avb(cx: &Ctx) -> Frame {
         None => y = widgets::paragraph(&mut c, t, f, y, l.pick(["正在读取 vbmeta", "正在讀取 vbmeta", "Reading vbmeta"])),
         Some(Err(why)) => y = widgets::paragraph(&mut c, t, f, y, why),
         Some(Ok(status)) => {
-            let slot = status.slot.letter();
+            let suffix = status.slot.suffix();
             let state = |bit| {
                 l.pick(if status.flags & bit == 0 {
                     ["开启", "開啟", "Enabled"]
@@ -213,7 +213,7 @@ pub fn avb(cx: &Ctx) -> Frame {
                 t,
                 f,
                 y,
-                &format!("vbmeta_{slot}\ndm-verity: {}\nAVB: {}", state(1), state(2)),
+                &format!("vbmeta{suffix}\ndm-verity: {}\nAVB: {}", state(1), state(2)),
             );
             let list = widgets::list(
                 &mut c,
@@ -324,7 +324,7 @@ pub fn partitions(cx: &Ctx, restore: bool) -> Frame {
         let subtitles: Vec<String> = available
             .iter()
             .map(|p| {
-                p.bytes.map(crate::fmt::gb).unwrap_or_else(|| {
+                p.bytes.map(crate::fmt::bytes).unwrap_or_else(|| {
                     l.pick([
                         "data 文件备份，需全部用户解密",
                         "data 檔案備份，需所有使用者解密",
