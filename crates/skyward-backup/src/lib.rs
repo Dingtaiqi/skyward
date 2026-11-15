@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod store;
+pub mod selection;
 
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,8 @@ pub enum Part {
 
 impl Part {
     pub const ALL: [Part; 4] = [Part::Boot, Part::System, Part::Data, Part::Efs];
+
+    pub fn index(self) -> usize { Self::ALL.iter().position(|&p| p == self).expect("every part is listed") }
 }
 
 /// What a backup holds.
@@ -77,6 +80,10 @@ impl Manifest {
         let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let manifest: Manifest = toml::from_str(&text).with_context(|| format!("read {}", path.display()))?;
         ensure!(manifest.format == FORMAT, "{} is in layout {}, which this recovery does not read", path.display(), manifest.format);
+        let mut names = std::collections::BTreeSet::new();
+        for item in &manifest.items {
+            ensure!(selection::valid_name(&item.name) && names.insert(&item.name), "invalid or repeated backup item {}", item.name);
+        }
         Ok(manifest)
     }
 

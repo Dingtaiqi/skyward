@@ -20,6 +20,8 @@ use crate::theme::Theme;
 use crate::tr;
 use crate::widgets::{self, Bar, Bolt, Cap, Layer, WlanMark};
 use skyward_info::DeviceInfo;
+use skyward_backup::selection::Partition as BackupPartition;
+use skyward_modules::root::{Catalog as RootCatalog, Operation as RootOperation};
 use skyward_install::{Event, ImageKind, Outcome, Reflash, Refusal, Stage};
 use skyward_net::download::{Failure, Progress};
 use skyward_net::github::{Build, Newest};
@@ -28,6 +30,9 @@ use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Joined, Network, Power, Stage as Joining, Traffic, Wlan};
 use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
+#[path = "app_tools.rs"]
+mod recovery_tools;
+pub use recovery_tools::AvbStatus;
 
 /// The pages of the recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +67,11 @@ pub enum Screen {
     BackupJob,
     /// Tools for the experienced: files, a terminal, the logs.
     Advanced,
+    RootModules,
+    RootModule,
+    Avb,
+    BackupPartitions,
+    RestorePartitions,
     Files,
     /// One file, and what can be done with it.
     FileInfo,
@@ -583,6 +593,7 @@ pub struct BackupEntry {
 /// What a backup holds, and where it was made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Held {
+    pub partitions: Vec<BackupPartition>,
     /// When it was made, in Unix seconds.
     pub made: i64,
     /// The bytes its files take.
@@ -847,6 +858,8 @@ impl Data {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Confirm {
+    RootModule,
+    DisableAvb,
     Reboot,
     Wipe,
     Flash,
@@ -1165,6 +1178,12 @@ pub const TIME_ZONES: [(Text, Text, &str); 9] = [
 /// What a control does when touched.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
+    RootPick(Option<usize>),
+    RootOperation(RootOperation),
+    AvbCheck(usize),
+    BackupItem(usize),
+    RestoreItem(usize),
+    BackupItemsAll(bool),
     Open(Screen),
     /// Leave the decrypt page for the page it was opened from; the page
     /// the recovery started on, for the home page without keeping it
@@ -1578,6 +1597,16 @@ impl Frame {
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
+    pub root_modules: Option<Result<RootCatalog, String>>,
+    pub root_pick: Option<usize>,
+    pub root_operation: RootOperation,
+    pub avb: Option<Result<AvbStatus, String>>,
+    pub avb_checks: [bool; 2],
+    pub tools_busy: bool,
+    pub tools_notice: Option<String>,
+    pub backup_partitions: Option<Result<Vec<BackupPartition>, String>>,
+    pub backup_include: Option<Vec<String>>,
+    pub restore_include: Option<Vec<String>>,
     /// The language the pages speak.
     pub lang: Lang,
     /// The language was chosen on the language page, now or at an earlier
@@ -1758,6 +1787,16 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
+            root_modules: None,
+            root_pick: None,
+            root_operation: RootOperation::Disable,
+            avb: None,
+            avb_checks: [true, true],
+            tools_busy: false,
+            tools_notice: None,
+            backup_partitions: None,
+            backup_include: None,
+            restore_include: None,
             lang: Lang::Hans,
             language_chosen: false,
             dark: false,
@@ -1953,6 +1992,11 @@ pub enum Shot {
 /// Work the runtime carries out on the UI's behalf.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
+    ReadRootModules,
+    RootModule { id: Option<String>, operation: RootOperation },
+    ReadAvb,
+    DisableAvb { status: AvbStatus, checks: [bool; 2], place: Place },
+    ReadBackupPartitions,
     Reboot(Target),
     /// A short tap of the vibration motor.
     Haptic,
@@ -2089,10 +2133,10 @@ pub enum Effect {
     /// a folder of their own in `place`, telling how it goes with
     /// [`App::backup_started`], [`App::backup_plan`], [`App::backup_at`]
     /// and [`App::backup_ended`].
-    Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool },
+    Backup { parts: [bool; 4], place: Place, compress: bool, verify: bool, include: Option<Vec<String>> },
     /// Restore the parts ticked of the backup in the folder `name` of
     /// `place`, telling how it goes as a backup does.
-    Restore { place: Place, name: String, parts: [bool; 4] },
+    Restore { place: Place, name: String, parts: [bool; 4], include: Option<Vec<String>> },
     /// Look for backups in the places that can be read, telling what is
     /// found with [`App::set_backups`].
     FindBackups { storage: bool, usb: bool },
@@ -4794,6 +4838,7 @@ impl App {
     /// and in a place, until it reaches the place's top.
     fn back(&mut self, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
+        if self.state.tools_busy { return fx; }
         if self.stack.len() <= 1 {
             return fx;
         }
@@ -5071,6 +5116,9 @@ impl App {
     /// how it learns which control a user's screen lock is answered with.
     fn arrive_at(&mut self, s: Screen) -> Vec<Effect> {
         match s {
+            Screen::RootModules => vec![Effect::ReadRootModules],
+            Screen::Avb => vec![Effect::ReadAvb],
+            Screen::BackupPartitions => vec![Effect::ReadBackupPartitions],
             Screen::Mount => vec![Effect::ReadMounts],
             Screen::Filesystems => vec![Effect::ReadFilesystems],
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
@@ -5130,8 +5178,12 @@ impl App {
 
     /// Carry out a tapped control.
     fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
+        if self.state.tools_busy { return Vec::new(); }
         let l = self.state.lang;
         match action {
+            Action::RootPick(_) | Action::RootOperation(_) | Action::AvbCheck(_) | Action::BackupItem(_) | Action::RestoreItem(_) | Action::BackupItemsAll(_) => {
+                return self.recovery_action(action);
+            }
             Action::Open(s) => {
                 if s == Screen::Search && self.screen() == Screen::Home {
                     // The bar moves up from where it stands unfolded: a
@@ -5374,6 +5426,7 @@ impl App {
                 self.refresh();
             }
             Action::BackupPart(k) => {
+                self.state.backup_include = None;
                 self.state.backup[k] = !self.state.backup[k];
                 self.refresh();
             }
@@ -5383,6 +5436,7 @@ impl App {
             }
             // All a backup holds is ticked to restore at first.
             Action::OpenBackup(i) => {
+                self.state.restore_include = None;
                 let entry = self.state.backups[i].clone();
                 let parts = entry.held.as_ref().map_or([false; 4], |h| h.parts);
                 self.state.restore = Some((entry, parts));
@@ -5390,6 +5444,7 @@ impl App {
                 self.open(Screen::RestoreBackup);
             }
             Action::RestorePart(k) => {
+                self.state.restore_include = None;
                 let (_, parts) = self.state.restore.as_mut().expect("the restore page shows a backup");
                 parts[k] = !parts[k];
                 self.refresh();
@@ -6448,8 +6503,10 @@ impl App {
 
     /// What a swipe-to-confirm control slid to its end does.
     fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
+        if self.state.tools_busy { return Vec::new(); }
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            Confirm::RootModule | Confirm::DisableAvb => return self.recovery_confirmed(which, now),
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
@@ -6488,7 +6545,7 @@ impl App {
                         (Place::UsbDrive, _) => USB_DRIVE_WANTED,
                     })
                 };
-                let backup = Effect::Backup { parts: s.backup, place: s.backup_to, compress: s.compress, verify: s.verify };
+                let backup = Effect::Backup { parts: s.backup, place: s.backup_to, compress: s.compress, verify: s.verify, include: s.backup_include.clone() };
                 match refused {
                     Some(why) => self.say(l.pick(why), now),
                     None => fx.push(backup),
@@ -6496,7 +6553,7 @@ impl App {
             }
             Confirm::Restore => {
                 let (entry, parts) = self.state.restore.as_ref().expect("the restore page shows a backup");
-                let restore = Effect::Restore { place: entry.place, name: entry.name.clone(), parts: *parts };
+                let restore = Effect::Restore { place: entry.place, name: entry.name.clone(), parts: *parts, include: self.state.restore_include.clone() };
                 if !parts.contains(&true) {
                     self.say(l.pick(["请选择要恢复的内容", "請選擇要還原的內容", "Choose what to restore"]), now);
                 } else if parts[2] && self.state.data != Data::Open {
@@ -7104,6 +7161,11 @@ mod tests {
             Screen::Backup,
             Screen::Restore,
             Screen::Advanced,
+            Screen::RootModules,
+            Screen::RootModule,
+            Screen::Avb,
+            Screen::BackupPartitions,
+            Screen::RestorePartitions,
             Screen::Files,
             Screen::Terminal,
             Screen::Language,
@@ -9415,7 +9477,7 @@ mod tests {
         assert_eq!(app.deadline(0), Some(TOAST_MS), "and says so");
         // The owner's files open first; another user's still wait.
         app.data_waiting(Some((10, Keys::Digits)));
-        let first = Effect::Backup { parts: [true, true, false, true], place: Place::Storage, compress: false, verify: true };
+        let first = Effect::Backup { parts: [true, true, false, true], place: Place::Storage, compress: false, verify: true, include: None };
         assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![first]);
         tap(&mut app, &f, &i, Action::BackupPart(2));
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "the data partition is backed up only with every user's files open");
@@ -9427,7 +9489,7 @@ mod tests {
         tap(&mut app, &f, &i, Action::Toggle(Switch::Verify));
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "no drive is plugged in");
         app.set_usb_drive(Some(UsbDrive::Shown));
-        let second = Effect::Backup { parts: [false, true, true, true], place: Place::UsbDrive, compress: true, verify: false };
+        let second = Effect::Backup { parts: [false, true, true, true], place: Place::UsbDrive, compress: true, verify: false, include: None };
         assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![second]);
         for k in 1..4 {
             tap(&mut app, &f, &i, Action::BackupPart(k));
@@ -9446,13 +9508,65 @@ mod tests {
         assert!(swipe(&mut app, &f, &i, Confirm::Backup).is_empty(), "encrypted user files must not be presented as a complete decrypted data backup");
         tap(&mut app, &f, &i, Action::BackupPart(2));
         assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![Effect::Backup {
-            parts: [true, true, false, true], place: Place::Storage, compress: false, verify: true,
+            parts: [true, true, false, true], place: Place::Storage, compress: false, verify: true, include: None,
         }], "the owner's storage can still hold backups of other partitions");
+    }
+
+    #[test]
+    fn individual_backup_selection_does_not_expand_to_the_whole_boot_group() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::BackupPartitions, &f, &i);
+        app.data_waiting(None);
+        app.set_backup_partitions(Ok(["boot", "init_boot", "vendor_boot"].map(|name| BackupPartition { name: name.into(), part: skyward_backup::Part::Boot, bytes: Some(4096) }).to_vec()));
+        app.act(Action::BackupItemsAll(false), 0);
+        app.act(Action::BackupItem(1), 0);
+        assert_eq!(app.state.backup, [true, false, false, false]);
+        app.open(Screen::Backup);
+        assert_eq!(swipe(&mut app, &f, &i, Confirm::Backup), vec![Effect::Backup {
+            parts: [true, false, false, false], place: Place::Storage, compress: false, verify: true, include: Some(vec!["init_boot".into()]),
+        }]);
+        app.act(Action::BackupPart(0), 0);
+        assert_eq!(app.state.backup_include, None, "group selection explicitly leaves custom selection");
+    }
+
+    #[test]
+    fn avb_confirmation_requires_an_unlocked_idle_slot_and_available_backup_storage() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Avb, &f, &i);
+        let status = AvbStatus { slot: Slot::A, flags: 0, unlocked: false, snapshot: SnapshotState::None };
+        app.set_avb(Ok(status.clone()));
+        app.data_waiting(None);
+        assert!(app.confirmed(Confirm::DisableAvb, 0).is_empty());
+        let status = AvbStatus { unlocked: true, ..status };
+        app.set_avb(Ok(status.clone()));
+        assert_eq!(app.confirmed(Confirm::DisableAvb, 0), vec![Effect::DisableAvb { status, checks: [true, true], place: Place::Storage }]);
+        assert!(app.state.tools_busy);
+        assert!(app.confirmed(Confirm::DisableAvb, 0).is_empty(), "a write cannot be submitted twice");
+        assert!(app.act(Action::RebootTo(Target::System), 0).is_empty(), "a UI reboot waits for the operation");
+        app.tools_finished(Err("backup failed".into()));
+        assert!(!app.state.tools_busy);
+        assert!(app.state.tools_notice.as_ref().unwrap().contains("backup failed"));
+    }
+
+    #[test]
+    fn root_module_actions_name_one_module_and_do_not_run_a_module_script() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::RootModules, &f, &i);
+        app.set_root_modules(Ok(RootCatalog { kernelsu: true, modules: vec![skyward_modules::root::Module {
+            id: "example".into(), name: "Example".into(), version: "1".into(), author: "Test".into(), description: String::new(),
+            disabled: false, remove: false, staged: false, problem: None,
+        }], ..RootCatalog::default() }));
+        app.act(Action::RootPick(Some(0)), 0);
+        app.act(Action::RootOperation(RootOperation::Remove), 0);
+        assert_eq!(app.confirmed(Confirm::RootModule, 0), vec![Effect::RootModule { id: Some("example".into()), operation: RootOperation::Remove }]);
+        assert!(app.act(Action::RootOperation(RootOperation::Enable), 0).is_empty());
+        assert_eq!(app.state.root_operation, RootOperation::Remove, "the pending operation is not changed while it runs");
     }
 
     /// A backup found in `place`, made at `made`, holding `parts`.
     fn found(place: Place, made: i64, parts: [bool; 4]) -> BackupEntry {
         let held = Held {
+            partitions: Vec::new(),
             made,
             size: 6_200_000_000,
             parts,
@@ -9493,7 +9607,7 @@ mod tests {
         assert_eq!(swipe(&mut app, &f, &i, Confirm::Restore), vec![Effect::Restore {
             place: Place::Storage,
             name: name.clone(),
-            parts: [true, false, false, true]
+            parts: [true, false, false, true], include: None,
         }]);
         for k in [0, 3] {
             tap(&mut app, &f, &i, Action::RestorePart(k));

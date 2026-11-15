@@ -19,6 +19,7 @@ pub mod settings;
 pub mod sprite;
 pub mod surface;
 pub mod term;
+mod tool_pages;
 pub mod theme;
 pub mod widgets;
 

@@ -83,6 +83,7 @@ pub fn data_skipped(phone: &[String]) -> Vec<String> {
 }
 
 pub struct BackupTask {
+    pub include: Option<Vec<String>>,
     /// Which of [`Part::ALL`] to take.
     pub parts: [bool; 4],
     /// The folder of backups at the place chosen; this one goes into a
@@ -107,6 +108,8 @@ pub struct BackupTask {
 }
 
 pub struct RestoreTask {
+    pub include: Option<Vec<String>>,
+    pub efs: Vec<String>,
     pub folder: PathBuf,
     /// Which of [`Part::ALL`] to restore.
     pub parts: [bool; 4],
@@ -274,6 +277,28 @@ fn partition(name: &str) -> PathBuf {
     Path::new(BY_NAME).join(name)
 }
 
+/// The current slot's individual images and the existing data file archive.
+pub fn partitions(efs: &[String]) -> Result<Vec<skyward_backup::selection::Partition>> {
+    use skyward_backup::selection::Partition;
+    let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    let mut found = Vec::new();
+    for name in BOOT {
+        let device = partition(&format!("{name}{}", slot.suffix()));
+        if device.exists() { found.push(Partition { name: name.into(), part: Part::Boot, bytes: Some(skyward_block::size_bytes(device)?) }); }
+    }
+    if skyward_vab::snapshot_state()? == SnapshotState::None {
+        for (name, bytes) in skyward_vab::slot_sizes(slot)?.into_iter().filter(|(_, size)| *size > 0) {
+            found.push(Partition { name, part: Part::System, bytes: Some(bytes) });
+        }
+    }
+    found.push(Partition { name: "data".into(), part: Part::Data, bytes: None });
+    for name in efs {
+        let device = partition(name);
+        if device.exists() { found.push(Partition { name: name.clone(), part: Part::Efs, bytes: Some(skyward_block::size_bytes(device)?) }); }
+    }
+    Ok(found)
+}
+
 /// Tells how far a part has come in a pass over it, at most every
 /// [`PROGRESS_EVERY`].
 struct Telling<'a> {
@@ -344,9 +369,10 @@ fn no_update() -> Result<()> {
     Ok(())
 }
 
-fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
+pub(crate) fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<PathBuf> {
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
     let [boot, system, data, efs] = t.parts;
+    if boot && t.include.is_some() { no_update()?; }
     if system {
         no_update()?;
     }
@@ -358,7 +384,7 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
     if boot {
         // The boot partitions are backed up as the installed system's,
         // whose boot set goes back into them first.
-        skyward_systems::install::ensure_installed()?;
+        if t.include.is_none() { skyward_systems::install::ensure_installed()?; }
         for name in BOOT {
             let device = partition(&format!("{name}{}", slot.suffix()));
             if device.exists() {
@@ -386,6 +412,14 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
             plan.push((Part::Efs, name.clone(), Source::Block(device), size));
         }
     }
+    if let Some(include) = &t.include {
+        let available = plan.iter().map(|(part, name, _, size)| skyward_backup::selection::Partition {
+            name: name.clone(), part: *part, bytes: Some(*size),
+        }).collect::<Vec<_>>();
+        let mask = skyward_backup::selection::mask(include, &available)?;
+        plan = plan.into_iter().zip(mask).filter_map(|(item, keep)| keep.then_some(item)).collect();
+    }
+    ensure!(!plan.is_empty(), "no partition selected");
     // Compressed, what the files take is not known until they are written.
     needed += plan.iter().map(|p| p.3).sum::<u64>();
     let free = free_bytes(&t.into)?;
@@ -397,6 +431,7 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
         mount::remount_writable(at, true)?;
     }
     let folder = t.into.join(&t.stamp);
+    ensure!(!folder.exists(), "backup folder {} already exists", folder.display());
     let made = (|| -> Result<()> {
         skyward_files::make_folders(&folder, t.ownership)?;
         let mut items = Vec::new();
@@ -498,6 +533,13 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
     let mut items: Vec<&Item> = manifest.items.iter().filter(|i| t.parts[index(i.part)]).collect();
+    if let Some(include) = &t.include {
+        let available = items.iter().map(|i| skyward_backup::selection::Partition {
+            name: i.name.clone(), part: i.part, bytes: Some(i.stored.size),
+        }).collect::<Vec<_>>();
+        let mask = skyward_backup::selection::mask(include, &available)?;
+        items = items.into_iter().zip(mask).filter_map(|(item, keep)| keep.then_some(item)).collect();
+    }
     ensure!(!items.is_empty(), "nothing chosen to restore is in the backup");
     items.sort_by_key(|i| RESTORE_ORDER.iter().position(|&p| p == i.part));
     // All that can be seen before anything is written.
@@ -507,6 +549,13 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
     }
     let sizes = if system { skyward_vab::slot_sizes(slot)? } else { Vec::new() };
     for item in &items {
+        ensure!(skyward_backup::selection::valid_name(&item.name), "invalid partition name");
+        match item.part {
+            Part::Boot => ensure!(BOOT.contains(&item.name.as_str()), "{} is not a boot backup target", item.name),
+            Part::Efs => ensure!(t.efs.contains(&item.name), "{} is not an EFS target configured for this phone", item.name),
+            Part::Data => ensure!(item.name == "data", "invalid data archive name"),
+            Part::System => {}
+        }
         match item.part {
             Part::Boot | Part::Efs => {
                 let device = target(item, slot);
@@ -545,8 +594,12 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
     // The boot partitions are restored as the installed system's, whose
     // boot set goes back into them first, so that the second system's is
     // not left kept as being there.
-    if items.iter().any(|i| i.part == Part::Boot) {
+    if t.include.is_none() && items.iter().any(|i| i.part == Part::Boot) {
         skyward_systems::install::ensure_installed()?;
+    }
+    if t.include.is_some() && items.iter().any(|i| i.part == Part::Boot) {
+        let state = skyward_systems::State::load(Path::new(skyward_systems::state::PATH))?;
+        ensure!(state.occupied.is_none() && state.switching.is_none(), "return to the installed system before restoring individual boot partitions");
     }
     // Once anything is written, the restore goes on to its end.
     let go_on = AtomicBool::new(false);

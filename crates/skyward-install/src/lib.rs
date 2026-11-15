@@ -4,6 +4,7 @@
 //! script inside them, and partition images, which are written here.
 
 pub mod adb;
+pub mod avb;
 pub mod asked;
 pub mod blockmap;
 pub mod commands;

@@ -311,7 +311,7 @@ fn main() -> Result<()> {
 
     // The pages the remaining features open, each with what it would show.
     let made = |place, made, size, parts, system: &str| {
-        let held = Held { made, size, parts, device: cfg.device.codename.clone(), system: Some(system.into()), slot: Some(Slot::B) };
+        let held = Held { partitions: Vec::new(), made, size, parts, device: cfg.device.codename.clone(), system: Some(system.into()), slot: Some(Slot::B) };
         BackupEntry { place, name: fmt::stamp(made, 0), held: Ok(held) }
     };
     let backups = vec![

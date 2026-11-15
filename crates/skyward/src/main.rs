@@ -40,6 +40,8 @@ mod ui;
 #[cfg(target_os = "android")]
 mod updates;
 #[cfg(target_os = "android")]
+mod recovery_tools;
+#[cfg(target_os = "android")]
 mod wipe;
 #[cfg(target_os = "android")]
 mod wlan;

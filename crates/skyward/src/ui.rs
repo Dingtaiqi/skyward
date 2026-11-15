@@ -8,6 +8,7 @@ use crate::merge;
 use crate::partwork;
 use crate::pty;
 use crate::readings::{Reading, Readings};
+use crate::recovery_tools;
 use crate::secure;
 use crate::services;
 use crate::settings;
@@ -431,6 +432,7 @@ fn backups_at(place: Place) -> Result<Vec<BackupEntry>> {
 /// What a backup's manifest records, as the pages show it.
 fn held(m: &skyward_backup::Manifest) -> Held {
     Held {
+        partitions: m.items.iter().map(|i| skyward_backup::selection::Partition { name: i.name.clone(), part: i.part, bytes: Some(i.stored.size) }).collect(),
         made: m.made,
         size: m.size(),
         parts: m.parts(),
@@ -1336,6 +1338,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     let mut relabeler: Option<filework::Worker> = None;
     // Backing up or restoring under way.
     let mut backuper: Option<backup::Worker> = None;
+    let mut tool_worker: Option<recovery_tools::Worker> = None;
     // An update's merge followed: one the recovery found under way, which
     // the kernel took up again as the snapshots were mapped, or one started
     // on the update page.
@@ -1515,6 +1518,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         // adb and file transfer stay up.
         let systems_busy = systems_worker.as_ref().is_some_and(systems::Worker::busy);
         let busy = installer.is_some()
+            || tool_worker.is_some()
             || eraser.is_some()
             || worker.is_some()
             || relabeler.is_some()
@@ -1564,6 +1568,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         if let Some(b) = &backuper {
             fds.push(b.fd());
         }
+        if let Some(w) = &tool_worker { fds.push(w.fd()); }
         if let Some(m) = &merger {
             fds.push(m.fd());
         }
@@ -1935,7 +1940,14 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         // change, while nothing else has /metadata: not in fastboot, whose
         // fastbootd may, nor while an install, a merge, erasing, a backup or
         // work on whole partitions is under way.
+        if let Some(ended) = tool_worker.as_ref().and_then(recovery_tools::Worker::ended) {
+            tool_worker = None;
+            app.tools_finished(ended);
+            app.set_root_modules(skyward_modules::root::scan(Path::new("/data/adb")).map_err(|e| format!("{e:#}")));
+            app.set_avb(recovery_tools::avb_status().map_err(|e| format!("{e:#}")));
+        }
         let metadata_busy = fastboot
+            || tool_worker.is_some()
             || installer.is_some()
             || merger.is_some()
             || eraser.is_some()
@@ -2308,6 +2320,44 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         ensure!(decryptor.is_none(), "the data partition is being opened already");
                         decryptor = Some(Decryptor::start(decrypt::Job::Open, cfg.decrypt)?);
                     }
+                    Effect::ReadRootModules => app.set_root_modules(skyward_modules::root::scan(Path::new("/data/adb")).map_err(|e| format!("{e:#}"))),
+                    Effect::ReadAvb => app.set_avb(recovery_tools::avb_status().map_err(|e| format!("{e:#}"))),
+                    Effect::ReadBackupPartitions => app.set_backup_partitions(backup::partitions(&cfg.backup.efs).map_err(|e| format!("{e:#}"))),
+                    Effect::RootModule { id, operation } => {
+                        if installer.is_some() || backuper.is_some() || part_worker.is_some() || eraser.is_some() || merger.is_some() || decryptor.is_some() || relabeler.is_some() || tool_worker.is_some() || skyward_updater.is_some() || systems_busy {
+                            app.tools_finished(Err("another operation is still running".into()));
+                            continue;
+                        }
+                        match recovery_tools::Worker::start(recovery_tools::Task::Module { id, operation }) {
+                            Ok(worker) => tool_worker = Some(worker),
+                            Err(e) => app.tools_finished(Err(format!("{e:#}"))),
+                        }
+                    }
+                    Effect::DisableAvb { status, checks, place } => {
+                        if installer.is_some() || backuper.is_some() || part_worker.is_some() || eraser.is_some() || merger.is_some() || decryptor.is_some() || relabeler.is_some() || tool_worker.is_some() || skyward_updater.is_some() || systems_busy {
+                            app.tools_finished(Err("another operation is still running".into()));
+                            continue;
+                        }
+                        let task = (|| -> Result<recovery_tools::Task> {
+                            ensure!(app.state.place_open(place), "the backup destination is unavailable");
+                            let into = backups_in(place);
+                            let there = into.ancestors().find(|p| p.exists()).context("no backup destination")?;
+                            let made = unix_now()?;
+                            let backup = backup::BackupTask {
+                                include: Some(vec!["vbmeta".into()]), parts: [true, false, false, false],
+                                stamp: format!("{}-avb", skyward_ui::fmt::stamp(made, app.state.time_zone)),
+                                ownership: ownership(there)?, into, compress: false, verify: true,
+                                remount: (place == Place::UsbDrive).then(|| PathBuf::from(USB_DRIVE)),
+                                made, device: cfg.device.codename.clone(), system: info.os_version.clone(),
+                                efs: Vec::new(), skipped: Vec::new(),
+                            };
+                            Ok(recovery_tools::Task::Avb { expected: status, checks, backup: Box::new(backup) })
+                        })();
+                        match task.and_then(recovery_tools::Worker::start) {
+                            Ok(worker) => tool_worker = Some(worker),
+                            Err(e) => app.tools_finished(Err(format!("{e:#}"))),
+                        }
+                    }
                     Effect::Unlock { user, code } => {
                         ensure!(decryptor.is_none(), "the data partition is being opened already");
                         let job = decrypt::Job::Unlock { closed: closed.clone(), user, credential: code.into_bytes() };
@@ -2404,7 +2454,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     // An install still stopping may yet write; a backup or
                     // restore waits for it.
-                    Effect::Backup { parts, place, compress, verify } => {
+                    Effect::Backup { parts, place, compress, verify, include } => {
                         ensure!(backuper.is_none(), "a backup or restore is under way already");
                         if installer.is_some() {
                             app.report(app.state.lang.pick(INSTALL_UNFINISHED), now);
@@ -2421,6 +2471,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         };
                         let made = unix_now()?;
                         let task = backup::BackupTask {
+                            include,
                             parts,
                             stamp: skyward_ui::fmt::stamp(made, app.state.time_zone),
                             into,
@@ -2437,13 +2488,15 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         backuper = Some(backup::Worker::start(backup::Task::Backup(task))?);
                         app.backup_started(false, place, verify);
                     }
-                    Effect::Restore { place, name, parts } => {
+                    Effect::Restore { place, name, parts, include } => {
                         ensure!(backuper.is_none(), "a backup or restore is under way already");
                         if installer.is_some() {
                             app.report(app.state.lang.pick(INSTALL_UNFINISHED), now);
                             continue;
                         }
                         let task = backup::RestoreTask {
+                            include,
+                            efs: cfg.backup.efs.clone(),
                             folder: backups_in(place).join(&name),
                             parts,
                             device: cfg.device.codename.clone(),

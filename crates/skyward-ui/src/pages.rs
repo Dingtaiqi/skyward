@@ -80,6 +80,11 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::RestoreBackup => restore_backup(cx),
         Screen::BackupJob => backup_job(cx),
         Screen::Advanced => advanced(cx),
+        Screen::RootModules => crate::tool_pages::modules(cx),
+        Screen::RootModule => crate::tool_pages::module(cx),
+        Screen::Avb => crate::tool_pages::avb(cx),
+        Screen::BackupPartitions => crate::tool_pages::partitions(cx, false),
+        Screen::RestorePartitions => crate::tool_pages::partitions(cx, true),
         Screen::Files => files(cx),
         Screen::FileInfo => file_info(cx),
         Screen::Permissions => permissions(cx),
@@ -117,6 +122,8 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
 pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
     const INSTALL: Text = ["滑动以安装", "滑動以安裝", "Slide to install"];
     let (label, danger) = match which {
+        Confirm::RootModule => (["滑动以应用模块更改", "滑動以套用模組變更", "Slide to apply module changes"], true),
+        Confirm::DisableAvb => (["滑动以备份并禁用", "滑動以備份並停用", "Slide to back up and disable"], true),
         Confirm::Filesystem => match s.fs_action {
             FsAction::Repair => (["滑动以修复", "滑動以修復", "Slide to repair"], true),
             FsAction::Remake(_) => (["滑动以更换", "滑動以更換", "Slide to change"], true),
@@ -184,12 +191,12 @@ fn sheet(cx: &Ctx, h: u32, bg: Rgba) -> Canvas {
     Canvas::band(w, h, rows.0..rows.1, cols.0..cols.1, bg)
 }
 
-fn page(cx: &Ctx) -> Canvas {
+pub(crate) fn page(cx: &Ctx) -> Canvas {
     sheet(cx, cx.t.m.h, cx.t.pal.bg)
 }
 
 /// A canvas tall enough for a scrolling page; [`fit`] trims it to the content.
-fn long_page(cx: &Ctx) -> Canvas {
+pub(crate) fn long_page(cx: &Ctx) -> Canvas {
     sheet(cx, cx.t.m.h * 3, cx.t.pal.bg)
 }
 
@@ -201,11 +208,11 @@ fn fitted(t: &Theme, bottom: f32) -> u32 {
 
 /// Trim a long page to its content plus the bottom margin, and never shorter
 /// than one screen.
-fn fit(c: Canvas, t: &Theme, bottom: f32) -> Canvas {
+pub(crate) fn fit(c: Canvas, t: &Theme, bottom: f32) -> Canvas {
     c.crop_height(fitted(t, bottom))
 }
 
-fn hits(rects: &[Rect], actions: &[Action]) -> Vec<Hit> {
+pub(crate) fn hits(rects: &[Rect], actions: &[Action]) -> Vec<Hit> {
     rects.iter().zip(actions).map(|(&rect, &action)| Hit { rect, action }).collect()
 }
 
@@ -1831,7 +1838,10 @@ pub fn backup(cx: &Ctx) -> Frame {
         .collect();
     let parts = widgets::list(&mut c, t, f, y, &rows);
     out.extend(hits(&parts.rows, &[0, 1, 2, 3].map(Action::BackupPart)));
-    let y = widgets::section(&mut c, t, f, parts.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
+    let selection = s.backup_include.as_ref().map(|names| names.join(", ")).unwrap_or_else(|| l.pick(["按上方分组选择", "按上方群組選擇", "Using the groups above"]).to_owned());
+    let custom = widgets::list(&mut c, t, f, parts.bottom, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selection)]);
+    out.extend(hits(&custom.rows, &[Action::Open(Screen::BackupPartitions)]));
+    let y = widgets::section(&mut c, t, f, custom.bottom, l.pick(["存放位置", "存放位置", "Save to"]));
     let storage = match (s.data.storage_open(), i.storage.free.map(fmt::gb)) {
         (true, Some(free)) => tr!(l, "剩余 {free}", "剩餘 {free}", "{free} free"),
         (true, None) => l.pick(["无法读取剩余空间", "無法讀取剩餘空間", "Free space unknown"]).to_string(),
@@ -1949,8 +1959,15 @@ pub fn restore_backup(cx: &Ctx) -> Frame {
                 let rows: Vec<Row> = kept.iter().map(|&k| Row::new(l.pick(BACKUP_PARTS[k])).trail(Trail::Check(chosen[k]))).collect();
                 let list = widgets::list(&mut c, t, f, y, &rows);
                 out.extend(list.rows.iter().zip(&kept).map(|(&rect, &k)| Hit { rect, action: Action::RestorePart(k) }));
+                let mut bottom = list.bottom;
+                if !held.partitions.is_empty() {
+                    let selected = s.restore_include.as_ref().map(|names| names.join(", ")).unwrap_or_default();
+                    let custom = widgets::list(&mut c, t, f, bottom, &[Row::new(l.pick(["选择具体分区", "選擇個別分割區", "Select individual partitions"])).subtitle(&selected)]);
+                    out.extend(hits(&custom.rows, &[Action::Open(Screen::RestorePartitions)]));
+                    bottom = custom.bottom;
+                }
                 let note = l.pick(["恢复后，所选内容的现有数据将被备份覆盖。", "還原後，所選內容的現有資料將被備份覆寫。", "Restoring writes the backup over what the parts chosen hold now."]);
-                let mut y = widgets::footnote(&mut c, t, f, list.bottom, note);
+                let mut y = widgets::footnote(&mut c, t, f, bottom, note);
                 if chosen[2] {
                     let note = l.pick([
                         "data 分区将恢复应用、账户和设置，内部存储、锁屏密码和指纹保持不变。恢复出厂设置后，无法再恢复此前的 data 分区备份。",
@@ -2206,6 +2223,8 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
+        Row::new(l.pick(["Root 模块管理", "Root 模組管理", "Root modules"])).icon(PURPLE, Icon::Layers),
+        Row::new(l.pick(["AVB 校验", "AVB 驗證", "AVB verification"])).icon(ORANGE, Icon::Shield),
         Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
     ]);
@@ -2214,6 +2233,8 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
+        Action::Open(Screen::RootModules),
+        Action::Open(Screen::Avb),
         Action::Open(Screen::Logs),
         Action::Open(Screen::Update),
     ]);
