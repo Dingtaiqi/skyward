@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod protection;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-use protection::ReadOnly;
+pub use protection::ReadOnly;
 
 #[cfg(all(test, target_os = "linux"))]
 mod block_tests;

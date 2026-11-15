@@ -29,7 +29,7 @@ pub(super) fn set_read_only(file: &File, on: bool) -> io::Result<()> {
     ioctl(file, BLKROSET, &mut libc::c_int::from(on))
 }
 
-pub(super) struct ReadOnly {
+pub struct ReadOnly {
     path: PathBuf,
     held: Option<File>,
 }

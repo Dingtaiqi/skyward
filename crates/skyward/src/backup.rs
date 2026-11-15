@@ -648,6 +648,9 @@ fn target(item: &Item, slot: Slot) -> PathBuf {
 /// from the storage and see that it holds what was stored: twice the
 /// part's bytes, told as they go.
 fn write_image(device: &Path, folder: &Path, stored: &Stored, telling: &mut Telling) -> Result<()> {
+    // Share the installer's tested, per-device guard. Errors restore the
+    // original block read-only flag after the output descriptor closes.
+    let mut protection = skyward_install::image::ReadOnly::clear(device)?;
     let mut reader = Reader::open(folder, stored);
     let mut out = OpenOptions::new().write(true).open(device).with_context(|| format!("open {}", device.display()))?;
     copy(&mut reader, &mut out, stored.size, &AtomicBool::new(false), telling).with_context(|| format!("write {}", device.display()))?;
@@ -661,5 +664,7 @@ fn write_image(device: &Path, folder: &Path, stored: &Stored, telling: &mut Tell
     let back = File::open(device).with_context(|| format!("open {}", device.display()))?;
     let read = store::digest(back, stored.size, &mut |n| telling.done(stored.size + n)).with_context(|| format!("read {} back", device.display()))?;
     ensure!(read == stored.sha256, "{} reads back different from the backup", device.display());
+    drop(out);
+    protection.restore()?;
     Ok(())
 }
